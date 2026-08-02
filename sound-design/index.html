@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhisprStream — Dictation Sound Effects</title>
+<style>
+  :root{
+    --accent:#0A84FF;
+    --accent-soft: rgba(10,132,255,0.16);
+    --gold:#ffb340;
+    --bg-0:#08080b;
+    --card:#16161c;
+    --card-hover:#1c1c24;
+    --border: rgba(255,255,255,0.08);
+    --text-0: rgba(255,255,255,0.92);
+    --text-1: rgba(255,255,255,0.56);
+    --text-2: rgba(255,255,255,0.34);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    min-height:100vh;
+    background:
+      radial-gradient(1200px 600px at 20% -10%, rgba(10,132,255,0.10), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(120,80,255,0.08), transparent 55%),
+      var(--bg-0);
+    color:var(--text-0);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "SF Pro Display", "Segoe UI", sans-serif;
+    padding: 48px 24px 80px;
+  }
+  .wrap{ max-width: 760px; margin: 0 auto; }
+
+  header{ margin-bottom: 36px; }
+  .eyebrow{
+    font-size:12px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--accent); margin-bottom:10px;
+  }
+  h1{ font-size:26px; font-weight:700; margin:0 0 10px; letter-spacing:-0.01em; }
+  p.lede{ color:var(--text-1); font-size:15px; line-height:1.55; max-width:640px; margin:0; }
+
+  .hud{
+    display:flex; align-items:center; gap:16px;
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    border:0.5px solid var(--border);
+    border-radius:24px;
+    padding: 18px 22px;
+    margin: 28px 0 40px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 20px 40px -20px rgba(0,0,0,0.6);
+  }
+  #viz{ display:block; width:180px; height:34px; flex-shrink:0; }
+  .hud-label{ font-size:13px; color:var(--text-1); }
+  .hud-label b{ color:var(--text-0); font-weight:600; }
+  .hud-status{ margin-left:auto; font-size:12px; color:var(--text-2); font-variant-numeric: tabular-nums; }
+
+  .vol{ display:flex; align-items:center; gap:8px; margin: 0 0 32px; color:var(--text-1); font-size:13px; }
+  .vol input{ accent-color: var(--accent); flex:1; max-width:220px; }
+
+  .pair{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:20px;
+    padding:22px 22px 20px;
+    margin-bottom:22px;
+  }
+  .pair.recommended{ border-color: rgba(10,132,255,0.4); box-shadow: 0 0 0 1px rgba(10,132,255,0.15) inset; }
+  .pair-head{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .pair-head h2{ font-size:17px; font-weight:700; margin:0; }
+  .badge{
+    font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--accent); background:var(--accent-soft); border-radius:6px; padding:3px 7px;
+  }
+  .badge.muted{ color:var(--text-1); background: rgba(255,255,255,0.08); }
+  .pair-desc{ font-size:13px; color:var(--text-1); line-height:1.55; margin:0 0 18px; max-width:560px; }
+
+  .group-head{ margin:8px 0 16px; }
+  .group-head:not(:first-child){ margin-top:44px; padding-top:28px; border-top:0.5px solid var(--border); }
+  .group-head h2{ font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-2); margin:0 0 6px; }
+  .group-head p{ font-size:12.5px; color:var(--text-1); line-height:1.5; margin:0; max-width:560px; }
+
+  .halves{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:14px; }
+  @media (max-width: 560px){ .halves{ grid-template-columns: 1fr; } }
+  .half{
+    background: rgba(255,255,255,0.03);
+    border:0.5px solid var(--border);
+    border-radius:14px;
+    padding:14px 14px 12px;
+  }
+  .half .tag{ font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-2); margin-bottom:4px; }
+  .half h3{ font-size:14px; margin:0 0 6px; font-weight:600; }
+  .half p{ font-size:12px; color:var(--text-1); line-height:1.5; margin:0 0 12px; min-height:36px; }
+  .half.finish .tag{ color: var(--gold); }
+
+  button{ font-family:inherit; cursor:pointer; }
+  .btn{
+    display:inline-flex; align-items:center; gap:6px;
+    background: rgba(255,255,255,0.07); color:var(--text-0);
+    border:0.5px solid var(--border); border-radius:10px;
+    font-size:12.5px; font-weight:600; padding:7px 11px;
+  }
+  .btn:hover{ background: rgba(255,255,255,0.12); }
+  .btn.play{ color:var(--accent); }
+  .half.finish .btn.play{ color: var(--gold); }
+  .row{ display:flex; gap:8px; flex-wrap:wrap; }
+
+  .pair-actions{ display:flex; gap:10px; padding-top:14px; border-top:0.5px solid var(--border); }
+  .btn.big{
+    background:var(--accent); color:#fff; border:none; padding:10px 16px; border-radius:12px; font-size:13px;
+  }
+  .btn.big:hover{ filter:brightness(1.08); }
+  .btn.big.secondary{ background: rgba(255,255,255,0.08); color:var(--text-0); border:0.5px solid var(--border); }
+
+  .note{
+    margin-top:20px; padding:16px 18px; border-radius:14px;
+    background: rgba(255,255,255,0.04); border:0.5px solid var(--border);
+    font-size:12.5px; color:var(--text-1); line-height:1.6;
+  }
+  .note b{ color:var(--text-0); }
+  code{
+    background: rgba(255,255,255,0.08); padding:1px 6px; border-radius:6px;
+    font-size:11.5px; color:#8fd1ff; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  footer{ margin-top:28px; text-align:center; color:var(--text-2); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">WhisprStream · Sound Design</div>
+    <h1>Two finalists, and more like the click</h1>
+    <p class="lede">
+      Two finalists — <b>Open → Resolve</b> and <b>Click → Double‑Click</b> — plus three new
+      melody‑forward pairs with genuinely different shapes (a run, a turn motif, a down‑resolving
+      call/answer), four click variations, and one honestly‑caveated approximation of macOS's own
+      dictation sound for reference.
+    </p>
+  </header>
+
+  <div class="hud">
+    <canvas id="viz" width="360" height="68"></canvas>
+    <div class="hud-label">Now playing <b id="nowPlaying">—</b></div>
+    <div class="hud-status" id="status">idle</div>
+  </div>
+
+  <div class="vol">🔈 <input type="range" id="volume" min="0" max="1" step="0.01" value="0.85"></div>
+
+  <div id="pairs"></div>
+
+  <div class="note">
+    <b>Why finish still resolves, even without melody.</b> Click→Double‑Click has almost no
+    pitch, so it can't resolve harmonically the way Open→Resolve does. Instead resolution comes
+    from the second hit itself: same click voice, slightly brighter/higher, arriving right after
+    the first — the ear reads "click, click‑!" as one completed gesture the same way it reads a
+    finished chord, just without any melody to get fatiguing across hundreds of plays a day.
+    <br><br>
+    <b>About the "Apple Dictation" reference.</b> I don't have access to macOS's actual
+    dictation sound file — it's a proprietary asset I can't extract or copy, so what's below is
+    a synthesized approximation built from the general, well‑known character of that sound
+    (two quick plain notes up, mirrored down on stop), not a byte‑for‑byte match. Treat it as a
+    rough shape reference, not ground truth. For the real thing, turn on Dictation on your own
+    Mac (System Settings → Keyboard → Dictation) and trigger it live — that's the only fully
+    accurate comparison.
+    <br><br>
+    <b>Using the exported files in the app.</b> Downloads are 16‑bit PCM WAV. For lowest
+    playback latency with <code>NSSound</code>/<code>AVAudioPlayer</code>, convert to CAF:
+    <br>
+    <code>afconvert -f caff -d LEI16 click-start.wav click-start.caf</code>
+  </div>
+
+  <footer>Everything here is generated live in your browser via Web Audio — nothing is uploaded.</footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Synthesis primitives
+  // ---------------------------------------------------------------------
+
+  function tick(ctx, dest, { start, dur = 0.009, peak = 0.1, freq = 5000, q = 0.6 }) {
+    const n = Math.max(1, Math.ceil(ctx.sampleRate * dur));
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = freq;
+    bp.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(peak, start);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    src.connect(bp).connect(g).connect(dest);
+    src.start(start);
+  }
+
+  function tone(ctx, dest, { freq, start, dur, type = "sine", peak = 0.28, attack = 0.004, detuneCents = 0 }) {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, start);
+    if (detuneCents) osc.detune.setValueAtTime(detuneCents, start);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(peak, start + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    osc.connect(g).connect(dest);
+    osc.start(start);
+    osc.stop(start + dur + 0.05);
+  }
+
+  function pitchTone(ctx, dest, { f0, f1, start, dur, type = "sine", peak = 0.3, attack = 0.003 }) {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(f0, start);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(f1, 1), start + dur * 0.85);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(peak, start + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    osc.connect(g).connect(dest);
+    osc.start(start);
+    osc.stop(start + dur + 0.05);
+  }
+
+  // A quiet, longer-decaying detuned twin of a note = "bloom" (no reverb, stays clean).
+  function bloom(ctx, dest, { freq, start, dur, peak = 0.06 }) {
+    tone(ctx, dest, { freq, start, dur, type: "sine", peak, attack: 0.02, detuneCents: 7 });
+    tone(ctx, dest, { freq, start: start + 0.01, dur: dur * 0.8, type: "sine", peak: peak * 0.7, attack: 0.02, detuneCents: -6 });
+  }
+
+  // A very quiet high octave partial = "twinkle."
+  function twinkle(ctx, dest, { freq, start, dur = 0.09, peak = 0.035 }) {
+    tone(ctx, dest, { freq: freq * 2, start, dur, type: "sine", peak, attack: 0.003 });
+  }
+
+  // Notes (equal temperament)
+  const N = {
+    A4: 440.0, C5: 523.25, A5: 880.0,
+    C6: 1046.5, D6: 1174.66, E6: 1318.51, G6: 1567.98,
+    C7: 2093.0,
+  };
+
+  // ---------------------------------------------------------------------
+  // Finalist 1 — "Open / Resolve": start plays an open major 3rd (C6→E6),
+  // finish reuses the same tick + recalls E6, then resolves up through
+  // G6 to C7 (completing the triad an octave up) with bloom + twinkle.
+  // ---------------------------------------------------------------------
+
+  function buildOpenStart(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.08, freq: 6500, dur: 0.006 });
+    tone(ctx, dest, { freq: N.C6, start: t0, dur: 0.07, type: "triangle", peak: 0.22 });
+    tone(ctx, dest, { freq: N.E6, start: t0 + 0.048, dur: 0.13, type: "sine", peak: 0.30 });
+    tone(ctx, dest, { freq: N.E6 * 2, start: t0 + 0.05, dur: 0.09, type: "sine", peak: 0.04 });
+  }
+
+  function buildResolveFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.08, freq: 6500, dur: 0.006 }); // same voice as start
+    tone(ctx, dest, { freq: N.E6, start: t0, dur: 0.06, type: "triangle", peak: 0.17 }); // recalls the open note
+    tone(ctx, dest, { freq: N.G6, start: t0 + 0.04, dur: 0.09, type: "sine", peak: 0.25 });
+    tone(ctx, dest, { freq: N.C7, start: t0 + 0.08, dur: 0.22, type: "sine", peak: 0.32 }); // resolves up an octave
+    tone(ctx, dest, { freq: N.C5, start: t0 + 0.075, dur: 0.28, type: "sine", peak: 0.05, attack: 0.02 }); // warmth under the chord
+    bloom(ctx, dest, { freq: N.C7, start: t0 + 0.095, dur: 0.34, peak: 0.06 });
+    twinkle(ctx, dest, { freq: N.C7, start: t0 + 0.1, dur: 0.1 });
+  }
+
+  // ---------------------------------------------------------------------
+  // Three more melody-forward pairs. Unlike the earlier interval-only
+  // variations, each of these has a genuinely different melodic shape —
+  // a stepwise run, a turn motif, and an up-then-down call/answer — not
+  // just a different opening interval on the same skeleton.
+  // ---------------------------------------------------------------------
+
+  // Rising Run → Cascade: start is a quick 3-note stepwise run (C6-D6-E6).
+  // Finish recalls the run fast, then leaps on further through G6 to C7 —
+  // effectively finishing the scale started by the run.
+  function buildRunStart(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.08, freq: 6500, dur: 0.006 });
+    tone(ctx, dest, { freq: N.C6, start: t0, dur: 0.05, type: "triangle", peak: 0.20 });
+    tone(ctx, dest, { freq: N.D6, start: t0 + 0.035, dur: 0.05, type: "triangle", peak: 0.22 });
+    tone(ctx, dest, { freq: N.E6, start: t0 + 0.07, dur: 0.10, type: "sine", peak: 0.28 });
+    tone(ctx, dest, { freq: N.E6 * 2, start: t0 + 0.072, dur: 0.08, type: "sine", peak: 0.04 });
+  }
+  function buildCascadeFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.08, freq: 6500, dur: 0.006 }); // same voice as start
+    tone(ctx, dest, { freq: N.C6, start: t0, dur: 0.045, type: "triangle", peak: 0.14 }); // fast recall of the run
+    tone(ctx, dest, { freq: N.D6, start: t0 + 0.03, dur: 0.045, type: "triangle", peak: 0.16 });
+    tone(ctx, dest, { freq: N.E6, start: t0 + 0.06, dur: 0.06, type: "sine", peak: 0.20 });
+    tone(ctx, dest, { freq: N.G6, start: t0 + 0.10, dur: 0.09, type: "sine", peak: 0.26 });
+    tone(ctx, dest, { freq: N.C7, start: t0 + 0.15, dur: 0.22, type: "sine", peak: 0.32 }); // finishes the scale, an octave up
+    tone(ctx, dest, { freq: N.C5, start: t0 + 0.145, dur: 0.28, type: "sine", peak: 0.05, attack: 0.02 });
+    bloom(ctx, dest, { freq: N.C7, start: t0 + 0.165, dur: 0.34, peak: 0.06 });
+    twinkle(ctx, dest, { freq: N.C7, start: t0 + 0.17, dur: 0.1 });
+  }
+
+  // Motif → Phrase: start is a little "turn" — up, down, up (E6-C6-E6) —
+  // a real melodic gesture rather than a single interval. Finish recalls
+  // the exact turn, then extends it into a full resolving phrase.
+  function buildMotifStart(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.08, freq: 6500, dur: 0.006 });
+    tone(ctx, dest, { freq: N.E6, start: t0, dur: 0.055, type: "triangle", peak: 0.22 });
+    tone(ctx, dest, { freq: N.C6, start: t0 + 0.045, dur: 0.055, type: "triangle", peak: 0.20 });
+    tone(ctx, dest, { freq: N.E6, start: t0 + 0.09, dur: 0.10, type: "sine", peak: 0.28 });
+  }
+  function buildPhraseFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.08, freq: 6500, dur: 0.006 }); // same voice as start
+    tone(ctx, dest, { freq: N.E6, start: t0, dur: 0.045, type: "triangle", peak: 0.15 }); // fast recall of the turn
+    tone(ctx, dest, { freq: N.C6, start: t0 + 0.035, dur: 0.045, type: "triangle", peak: 0.14 });
+    tone(ctx, dest, { freq: N.E6, start: t0 + 0.07, dur: 0.06, type: "sine", peak: 0.20 });
+    tone(ctx, dest, { freq: N.G6, start: t0 + 0.11, dur: 0.09, type: "sine", peak: 0.26 }); // the extension
+    tone(ctx, dest, { freq: N.C7, start: t0 + 0.16, dur: 0.22, type: "sine", peak: 0.32 }); // resolves up
+    tone(ctx, dest, { freq: N.C5, start: t0 + 0.155, dur: 0.28, type: "sine", peak: 0.05, attack: 0.02 });
+    bloom(ctx, dest, { freq: N.C7, start: t0 + 0.175, dur: 0.34, peak: 0.06 });
+    twinkle(ctx, dest, { freq: N.C7, start: t0 + 0.18, dur: 0.1 });
+  }
+
+  // Call → Answer: the only pair that resolves *down*. Start rises,
+  // unresolved, like a spoken question (A5-C6-E6). Finish is a genuinely
+  // different phrase that answers it, settling back down to A5 — a real
+  // two-part melodic exchange rather than one phrase extended upward.
+  function buildCallStart(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.08, freq: 6500, dur: 0.006 });
+    tone(ctx, dest, { freq: N.A5, start: t0, dur: 0.06, type: "triangle", peak: 0.20 });
+    tone(ctx, dest, { freq: N.C6, start: t0 + 0.05, dur: 0.06, type: "triangle", peak: 0.22 });
+    tone(ctx, dest, { freq: N.E6, start: t0 + 0.10, dur: 0.12, type: "sine", peak: 0.28 });
+    tone(ctx, dest, { freq: N.E6 * 2, start: t0 + 0.102, dur: 0.08, type: "sine", peak: 0.04 });
+  }
+  function buildAnswerFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.08, freq: 6500, dur: 0.006 }); // same voice as start
+    tone(ctx, dest, { freq: N.E6, start: t0, dur: 0.06, type: "triangle", peak: 0.16 }); // recalls where the call ended
+    tone(ctx, dest, { freq: N.D6, start: t0 + 0.05, dur: 0.08, type: "sine", peak: 0.22 });
+    tone(ctx, dest, { freq: N.C6, start: t0 + 0.10, dur: 0.09, type: "sine", peak: 0.24 });
+    tone(ctx, dest, { freq: N.A5, start: t0 + 0.16, dur: 0.24, type: "sine", peak: 0.30 }); // settles back down, home
+    tone(ctx, dest, { freq: N.A4, start: t0 + 0.15, dur: 0.30, type: "sine", peak: 0.05, attack: 0.02 }); // warmth under the answer
+    bloom(ctx, dest, { freq: N.A5, start: t0 + 0.18, dur: 0.32, peak: 0.055 });
+    twinkle(ctx, dest, { freq: N.A5, start: t0 + 0.185, dur: 0.1 });
+  }
+
+  // ---------------------------------------------------------------------
+  // Finalist 2 — "Click / Double‑Click": the deliberately un‑musical
+  // option. A tuned filtered click with almost no pitch, built for
+  // near‑zero fatigue across hundreds of plays a day. Finish is the same
+  // click plus one slightly brighter click and a whisper of pitch.
+  // ---------------------------------------------------------------------
+
+  function buildClickStart(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.16, freq: 3800, dur: 0.012, q: 1.2 });
+    tone(ctx, dest, { freq: 700, start: t0, dur: 0.03, type: "sine", peak: 0.08, attack: 0.001 });
+  }
+
+  function buildDoubleClickFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.16, freq: 3800, dur: 0.012, q: 1.2 }); // same click voice
+    tone(ctx, dest, { freq: 700, start: t0, dur: 0.03, type: "sine", peak: 0.08, attack: 0.001 });
+    tick(ctx, dest, { start: t0 + 0.07, peak: 0.14, freq: 5200, dur: 0.012, q: 1.2 }); // second, brighter click
+    tone(ctx, dest, { freq: N.C6, start: t0 + 0.07, dur: 0.09, type: "sine", peak: 0.13, attack: 0.002 }); // subtle resolve
+  }
+
+  // ---------------------------------------------------------------------
+  // Four variations on Click/Double-Click: same two-hit shape (tick,
+  // then a second brighter tick shortly after), only the click's
+  // register and the finish's second gesture change.
+  // ---------------------------------------------------------------------
+
+  // Crisp — very short, very bright, zero pitch at all: the purest,
+  // most "mechanical" version, like a precise camera shutter half-press.
+  function buildCrispStart(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.18, freq: 7000, dur: 0.007, q: 1.8 });
+  }
+  function buildCrispFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.18, freq: 7000, dur: 0.007, q: 1.8 }); // same voice as start
+    tick(ctx, dest, { start: t0 + 0.06, peak: 0.16, freq: 8500, dur: 0.007, q: 1.8 }); // brighter second hit
+  }
+
+  // Deep — low, weighty "thock" instead of a light tick, with a soft
+  // low tone underneath for body. Feels heavier/more premium.
+  function buildDeepStart(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.18, freq: 1800, dur: 0.014, q: 1.0 });
+    tone(ctx, dest, { freq: 220, start: t0, dur: 0.05, type: "sine", peak: 0.09, attack: 0.002 });
+  }
+  function buildDeepFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.18, freq: 1800, dur: 0.014, q: 1.0 }); // same voice as start
+    tone(ctx, dest, { freq: 220, start: t0, dur: 0.05, type: "sine", peak: 0.09, attack: 0.002 });
+    tick(ctx, dest, { start: t0 + 0.08, peak: 0.16, freq: 2400, dur: 0.014, q: 1.0 });
+    tone(ctx, dest, { freq: 330, start: t0 + 0.08, dur: 0.08, type: "sine", peak: 0.10, attack: 0.002 });
+  }
+
+  // Triple — the original click voice, but finish adds a third, quieter
+  // trailing tick, like a small mechanism settling into place.
+  function buildTripleFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.16, freq: 3800, dur: 0.012, q: 1.2 }); // same voice as start
+    tone(ctx, dest, { freq: 700, start: t0, dur: 0.03, type: "sine", peak: 0.08, attack: 0.001 });
+    tick(ctx, dest, { start: t0 + 0.07, peak: 0.14, freq: 5200, dur: 0.012, q: 1.2 });
+    tone(ctx, dest, { freq: N.C6, start: t0 + 0.07, dur: 0.09, type: "sine", peak: 0.13, attack: 0.002 });
+    tick(ctx, dest, { start: t0 + 0.13, peak: 0.09, freq: 6200, dur: 0.01, q: 1.2 }); // quiet trailing click
+  }
+
+  // Chirp — the original click voice, but the finish's whisper-of-pitch
+  // becomes a tiny fast upward sweep instead of a static note: motion,
+  // not melody.
+  function buildChirpFinish(ctx, dest, t0) {
+    tick(ctx, dest, { start: t0, peak: 0.16, freq: 3800, dur: 0.012, q: 1.2 }); // same voice as start
+    tone(ctx, dest, { freq: 700, start: t0, dur: 0.03, type: "sine", peak: 0.08, attack: 0.001 });
+    tick(ctx, dest, { start: t0 + 0.07, peak: 0.14, freq: 5200, dur: 0.012, q: 1.2 });
+    pitchTone(ctx, dest, { f0: 900, f1: 1700, start: t0 + 0.07, dur: 0.06, peak: 0.13, attack: 0.002 });
+  }
+
+  // ---------------------------------------------------------------------
+  // "Apple Dictation" reference — a synthesized approximation, not an
+  // extracted copy (see the caveat in the notes section). Deliberately
+  // plainer than every option above: two quick plain sine notes up, no
+  // tick, no bloom, no shimmer. Finish just plays the same two notes in
+  // reverse.
+  // ---------------------------------------------------------------------
+
+  function buildAppleStart(ctx, dest, t0) {
+    tone(ctx, dest, { freq: 659.25, start: t0, dur: 0.09, type: "sine", peak: 0.26, attack: 0.006 }); // E5
+    tone(ctx, dest, { freq: 880.0, start: t0 + 0.075, dur: 0.13, type: "sine", peak: 0.28, attack: 0.006 }); // A5
+  }
+
+  function buildAppleFinish(ctx, dest, t0) {
+    tone(ctx, dest, { freq: 880.0, start: t0, dur: 0.09, type: "sine", peak: 0.26, attack: 0.006 }); // A5
+    tone(ctx, dest, { freq: 659.25, start: t0 + 0.075, dur: 0.15, type: "sine", peak: 0.24, attack: 0.006 }); // E5
+  }
+
+  const PAIRS = {
+    openResolve: {
+      title: "Open → Resolve",
+      desc: "Start plays an open interval (like a question). Finish recalls it, then climbs to complete the chord an octave up — a small harmonic “yes.”",
+      recommended: true,
+      badge: { text: "Finalist" },
+      start: { title: "Open", build: buildOpenStart, duration: 0.22 },
+      finish: { title: "Resolve", build: buildResolveFinish, duration: 0.55 },
+    },
+    clickDouble: {
+      title: "Click → Double‑Click",
+      desc: "A tuned filtered click with almost no pitch, built for near‑zero fatigue across hundreds of uses a day. Finish is the same click plus one brighter click.",
+      recommended: true,
+      badge: { text: "Finalist" },
+      start: { title: "Click", build: buildClickStart, duration: 0.05 },
+      finish: { title: "Double‑Click", build: buildDoubleClickFinish, duration: 0.2 },
+    },
+    risingRun: {
+      title: "Rising Run → Cascade",
+      desc: "Start is a quick 3-note stepwise run (C6‑D6‑E6), not a single interval. Finish recalls the run fast, then leaps on through G6 to C7 — finishing the scale the run started.",
+      recommended: false,
+      start: { title: "Run", build: buildRunStart, duration: 0.19 },
+      finish: { title: "Cascade", build: buildCascadeFinish, duration: 0.55 },
+    },
+    motifPhrase: {
+      title: "Motif → Phrase",
+      desc: "Start is a little melodic “turn” — up, down, up (E6‑C6‑E6) — a real gesture, not one note. Finish recalls the exact turn, then extends it into a full resolving phrase.",
+      recommended: false,
+      start: { title: "Motif", build: buildMotifStart, duration: 0.21 },
+      finish: { title: "Phrase", build: buildPhraseFinish, duration: 0.56 },
+    },
+    callAnswer: {
+      title: "Call → Answer",
+      desc: "The only pair that resolves downward. Start rises like a spoken question (A5‑C6‑E6). Finish is a genuinely different phrase that answers it, settling back down home to A5.",
+      recommended: false,
+      start: { title: "Call", build: buildCallStart, duration: 0.24 },
+      finish: { title: "Answer", build: buildAnswerFinish, duration: 0.55 },
+    },
+    crispClick: {
+      title: "Crisp Click",
+      desc: "Very short, very bright, zero pitch at all — the purest and most mechanical version, like a precise camera shutter half-press.",
+      recommended: false,
+      start: { title: "Crisp", build: buildCrispStart, duration: 0.03 },
+      finish: { title: "Crisp Double", build: buildCrispFinish, duration: 0.09 },
+    },
+    deepClick: {
+      title: "Deep Click",
+      desc: "A low, weighty “thock” instead of a light tick, with a soft low tone underneath for body. Heavier and more premium-feeling.",
+      recommended: false,
+      start: { title: "Deep", build: buildDeepStart, duration: 0.07 },
+      finish: { title: "Deep Double", build: buildDeepFinish, duration: 0.18 },
+    },
+    tripleClick: {
+      title: "Click → Triple Click",
+      desc: "Identical start to the original. Finish adds a third, quieter trailing click after the double — like a small mechanism settling into place.",
+      recommended: false,
+      start: { title: "Click", build: buildClickStart, duration: 0.05 },
+      finish: { title: "Triple Click", build: buildTripleFinish, duration: 0.16 },
+    },
+    chirpClick: {
+      title: "Click → Chirp",
+      desc: "Identical start to the original. Finish swaps the static pitch whisper for a tiny fast upward sweep — motion instead of a note.",
+      recommended: false,
+      start: { title: "Click", build: buildClickStart, duration: 0.05 },
+      finish: { title: "Chirp", build: buildChirpFinish, duration: 0.15 },
+    },
+    appleReference: {
+      title: "Apple Dictation (approximation)",
+      desc: "A plain, unlayered two-note up / two-note down pair, synthesized from general memory of macOS's own dictation sound — not an exact copy. See the caveat below.",
+      recommended: false,
+      badge: { text: "Reference — not an original design", muted: true },
+      start: { title: "Start", build: buildAppleStart, duration: 0.21 },
+      finish: { title: "Stop", build: buildAppleFinish, duration: 0.24 },
+    },
+  };
+
+  // ---------------------------------------------------------------------
+  // Live playback engine
+  // ---------------------------------------------------------------------
+
+  let ctx = null, master = null, analyser = null;
+  function ensureCtx() {
+    if (ctx) return ctx;
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain();
+    master.gain.value = parseFloat(volumeEl.value);
+    const comp = ctx.createDynamicsCompressor();
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    master.connect(comp).connect(analyser).connect(ctx.destination);
+    return ctx;
+  }
+
+  function playLive(build, title, duration) {
+    ensureCtx();
+    if (ctx.state === "suspended") ctx.resume();
+    build(ctx, master, ctx.currentTime + 0.005);
+    nowPlayingEl.textContent = title;
+    statusEl.textContent = "playing";
+    clearTimeout(playLive._t);
+    playLive._t = setTimeout(() => { statusEl.textContent = "idle"; }, duration * 1000 + 120);
+  }
+
+  function playSequence(items) {
+    ensureCtx();
+    if (ctx.state === "suspended") ctx.resume();
+    let t = ctx.currentTime + 0.05;
+    items.forEach(({ build, title, duration }) => {
+      const localT = t;
+      setTimeout(() => { nowPlayingEl.textContent = title; statusEl.textContent = "playing"; }, Math.max(0, (localT - ctx.currentTime)) * 1000);
+      build(ctx, master, localT);
+      t += duration + 0.35;
+    });
+    setTimeout(() => { statusEl.textContent = "idle"; }, (t - ctx.currentTime) * 1000);
+  }
+
+  // ---------------------------------------------------------------------
+  // Offline render + WAV export
+  // ---------------------------------------------------------------------
+
+  async function renderToBuffer(build, duration) {
+    const sampleRate = 44100;
+    const off = new OfflineAudioContext(1, Math.ceil(sampleRate * (duration + 0.15)), sampleRate);
+    build(off, off.destination, 0.005);
+    return off.startRendering();
+  }
+
+  function encodeWav(buffer) {
+    const samples = buffer.getChannelData(0);
+    const bytesPerSample = 2;
+    const out = new ArrayBuffer(44 + samples.length * bytesPerSample);
+    const view = new DataView(out);
+    const writeStr = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+    writeStr(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+    writeStr(8, "WAVE");
+    writeStr(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, buffer.sampleRate, true);
+    view.setUint32(28, buffer.sampleRate * bytesPerSample, true);
+    view.setUint16(32, bytesPerSample, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, "data");
+    view.setUint32(40, samples.length * bytesPerSample, true);
+    let off = 44;
+    for (let i = 0; i < samples.length; i++, off += 2) {
+      const v = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(off, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    }
+    return new Blob([view], { type: "audio/wav" });
+  }
+
+  function download(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  async function exportSound(build, duration, filename) {
+    const buf = await renderToBuffer(build, duration);
+    download(encodeWav(buf), filename);
+  }
+
+  // ---------------------------------------------------------------------
+  // Visualizer
+  // ---------------------------------------------------------------------
+
+  const BARS = 14;
+  const vizCanvas = document.getElementById("viz");
+  const vctx = vizCanvas.getContext("2d");
+
+  function drawViz() {
+    requestAnimationFrame(drawViz);
+    const w = vizCanvas.width, h = vizCanvas.height;
+    vctx.clearRect(0, 0, w, h);
+    let level = 0;
+    if (analyser) {
+      const data = new Uint8Array(analyser.fftSize);
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+      level = Math.sqrt(sum / data.length);
+    }
+    const barW = 3, gap = (w - BARS * barW) / (BARS - 1);
+    for (let i = 0; i < BARS; i++) {
+      const taper = Math.sin((Math.PI * (i + 0.5)) / BARS);
+      const idle = 0.14;
+      const amp = Math.min(1, idle + level * 3.2);
+      const barH = Math.max(3, taper * amp * (h - 6));
+      const x = i * (barW + gap);
+      const y = (h - barH) / 2;
+      vctx.fillStyle = level > 0.02 ? "#0A84FF" : "rgba(255,255,255,0.22)";
+      vctx.beginPath();
+      const r = barW / 2;
+      vctx.moveTo(x, y + r);
+      vctx.arcTo(x, y, x + r, y, r);
+      vctx.arcTo(x + barW, y, x + barW, y + r, r);
+      vctx.arcTo(x + barW, y + barH, x + barW - r, y + barH, r);
+      vctx.arcTo(x, y + barH, x, y + barH - r, r);
+      vctx.closePath();
+      vctx.fill();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------------------
+
+  const pairsEl = document.getElementById("pairs");
+  const nowPlayingEl = document.getElementById("nowPlaying");
+  const statusEl = document.getElementById("status");
+  const volumeEl = document.getElementById("volume");
+
+  function fname(pairTitle, half) {
+    return "whisprstream-" + pairTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + half + ".wav";
+  }
+
+  function pairCard(key) {
+    const p = PAIRS[key];
+    const el = document.createElement("div");
+    el.className = "pair" + (p.recommended ? " recommended" : "");
+    el.innerHTML = `
+      <div class="pair-head">
+        <h2>${p.title}</h2>
+        ${p.badge ? `<span class="badge${p.badge.muted ? " muted" : ""}">${p.badge.text}</span>` : ""}
+      </div>
+      <p class="pair-desc">${p.desc}</p>
+      <div class="halves">
+        <div class="half start">
+          <div class="tag">Start</div>
+          <h3>${p.start.title}</h3>
+          <p>Plays the instant dictation begins.</p>
+          <div class="row">
+            <button class="btn play" data-action="play-start">▶ Play</button>
+            <button class="btn" data-action="export-start">⬇ WAV</button>
+          </div>
+        </div>
+        <div class="half finish">
+          <div class="tag">Finish</div>
+          <h3>${p.finish.title}</h3>
+          <p>Plays the instant dictation ends.</p>
+          <div class="row">
+            <button class="btn play" data-action="play-finish">▶ Play</button>
+            <button class="btn" data-action="export-finish">⬇ WAV</button>
+          </div>
+        </div>
+      </div>
+      <div class="pair-actions">
+        <button class="btn big" data-action="preview">▶ Preview cycle</button>
+        <button class="btn big secondary" data-action="export-both">⬇ Export pair</button>
+      </div>
+    `;
+    el.addEventListener("click", (e) => {
+      const action = e.target.closest("[data-action]")?.dataset.action;
+      if (!action) return;
+      if (action === "play-start") playLive(p.start.build, `${p.title} — ${p.start.title}`, p.start.duration);
+      if (action === "play-finish") playLive(p.finish.build, `${p.title} — ${p.finish.title}`, p.finish.duration);
+      if (action === "preview") playSequence([
+        { build: p.start.build, title: `${p.title} — ${p.start.title}`, duration: p.start.duration },
+        { build: p.finish.build, title: `${p.title} — ${p.finish.title}`, duration: p.finish.duration },
+      ]);
+      if (action === "export-start") exportSound(p.start.build, p.start.duration, fname(p.title, "start"));
+      if (action === "export-finish") exportSound(p.finish.build, p.finish.duration, fname(p.title, "finish"));
+      if (action === "export-both") {
+        exportSound(p.start.build, p.start.duration, fname(p.title, "start"));
+        exportSound(p.finish.build, p.finish.duration, fname(p.title, "finish"));
+      }
+    });
+    return el;
+  }
+
+  function groupHeader(label, intro) {
+    const el = document.createElement("div");
+    el.className = "group-head";
+    el.innerHTML = `<h2>${label}</h2><p>${intro}</p>`;
+    return el;
+  }
+
+  const GROUPS = [
+    {
+      label: "Finalists",
+      intro: "The two you kept.",
+      pairs: ["openResolve", "clickDouble"],
+    },
+    {
+      label: "More melody",
+      intro: "Genuinely different melodic shapes, not just a new interval on the same skeleton: a stepwise run, a turn motif that gets extended, and a call/answer that's the only pair to resolve downward instead of up.",
+      pairs: ["risingRun", "motifPhrase", "callAnswer"],
+    },
+    {
+      label: "Click → Double‑Click — variations",
+      intro: "Same two-hit shape as the finalist, only the click's register and the finish's second gesture change: brighter/purer (Crisp), lower/heavier (Deep), a settling third hit (Triple), or a tiny pitch sweep instead of a static note (Chirp).",
+      pairs: ["crispClick", "deepClick", "tripleClick", "chirpClick"],
+    },
+    {
+      label: "Reference",
+      intro: "Not a candidate — a rough, honestly-caveated approximation of macOS's own dictation sound, included so you can compare the finalists against something familiar.",
+      pairs: ["appleReference"],
+    },
+  ];
+
+  GROUPS.forEach((g) => {
+    pairsEl.appendChild(groupHeader(g.label, g.intro));
+    g.pairs.forEach((key) => pairsEl.appendChild(pairCard(key)));
+  });
+
+  volumeEl.addEventListener("input", () => {
+    if (master) master.gain.value = parseFloat(volumeEl.value);
+  });
+
+  drawViz();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Personal voice samples (not for sharing)
+sample.wav
+jargon.wav
+
+# Python virtual environments
+.venv/
+.venv-voxtral/
+__pycache__/
+*.pyc
+
+# ML model weights
+models/
+
+# Swift build artifacts
+WhisprStream/.build/
+WhisprStream.app/
+
+# macOS
+.DS_Store
