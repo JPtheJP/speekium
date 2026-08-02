@@ -28,7 +28,7 @@
   <div class="wrap">
     <p class="eyebrow rise" style="--i:0">Open source · macOS</p>
     <h1 class="display rise" style="--i:1;margin-top:28px">
-      Open speech to text. Instantly yours.
+      Talk like you actually talk.
       <span class="roll" id="roll" aria-label="Sentences that mix two languages at once."></span>
     </h1>
     <p class="lede rise" style="--i:2">For people who mix languages mid-sentence without thinking about it — and for vibe coders who'd rather talk to the agent than type at it.</p>
@@ -57,26 +57,44 @@
     <p class="fineprint rise" style="--i:5">Free, MIT licensed · macOS 14 or later, Apple silicon</p>
   </div>
 
-  <!-- The app itself: same capsule, same settle animation. Concrete beats
-       abstract for "what does this thing do" — this replaced a braid
-       animation that looked good but didn't show the product. -->
-  <div class="wrap" style="display:flex;justify-content:center">
-    <div class="hud" id="hud" data-phase="live">
-      <div class="slot">
-        <div class="meter" id="meter"></div>
-        <div class="check"><svg viewBox="0 0 24 24"><path d="M4 12.5 9.5 18 20 6.5"/></svg></div>
-      </div>
-      <div class="line" id="line"><span class="inner" id="inner"></span><i class="caret" id="caret"></i></div>
-    </div>
+  <!-- Threads weave past each other, then damp into one line. Paths are
+       generated in app.js — add a thread/bead pair and it redraws itself. -->
+  <div class="braid" aria-hidden="true">
+    <svg id="braid" viewBox="0 0 1200 200" preserveAspectRatio="xMidYMid meet">
+      <path class="thread"/>
+      <path class="thread"/>
+      <path class="thread"/>
+      <circle class="bead" r="4"/>
+      <circle class="bead" r="4"/>
+      <circle class="bead" r="4"/>
+    </svg>
   </div>
+
+  <div class="wrap"><div class="cue rise" style="--i:6"><i></i> Scroll</div></div>
+</section>
+
+<!-- ============ HUD ============ -->
+<section class="invert stage reveal" id="watch">
   <div class="wrap">
-    <div class="legend rise" style="--i:6">
+    <p class="eyebrow rise" style="--i:0">While you speak</p>
+    <h2 class="h2 rise" style="--i:1">Watch it settle.</h2>
+    <p class="lede rise" style="--i:2">Solid once it's certain. Dim while it's still deciding.</p>
+
+    <div style="display:flex;justify-content:center">
+      <div class="hud" id="hud" data-phase="live">
+        <div class="slot">
+          <div class="meter" id="meter"></div>
+          <div class="check"><svg viewBox="0 0 24 24"><path d="M4 12.5 9.5 18 20 6.5"/></svg></div>
+        </div>
+        <div class="line" id="line"><span class="inner" id="inner"></span><i class="caret" id="caret"></i></div>
+      </div>
+    </div>
+
+    <div class="legend rise" style="--i:3">
       <span><em></em> Settled</span>
       <span class="dim"><em></em> Still deciding</span>
     </div>
   </div>
-
-  <div class="wrap"><div class="cue rise" style="--i:7"><i></i> Scroll</div></div>
 </section>
 
 <!-- ============ PRINCIPLES ============ -->
@@ -203,22 +221,6 @@
       <svg class="gh" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
       View on GitHub
     </a>
-  </div>
-</section>
-
-<!-- ============ CLOSING BRAID ============ -->
-<section class="reveal coda">
-  <!-- Threads weave past each other, then damp into one line. Paths are
-       generated in app.js — add a thread/bead pair and it redraws itself. -->
-  <div class="braid" aria-hidden="true">
-    <svg id="braid" viewBox="0 0 1200 200" preserveAspectRatio="xMidYMid meet">
-      <path class="thread"/>
-      <path class="thread"/>
-      <path class="thread"/>
-      <circle class="bead" r="4"/>
-      <circle class="bead" r="4"/>
-      <circle class="bead" r="4"/>
-    </svg>
   </div>
 </section>
 

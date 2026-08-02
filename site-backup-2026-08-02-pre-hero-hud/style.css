@@ -20,17 +20,6 @@
 
   --gut:clamp(24px,6vw,96px);
   --max:1100px;
-
-  /* The HUD capsule is a sheet of glass over whatever section it's in —
-     these are its only theme-dependent surfaces, so .hud never needs its
-     own light/dark rules. On white paper there's nothing behind the blur
-     to show through, so the border and shadow carry the "floating card"
-     read instead of the tinted fill that does it on black. */
-  --glass:rgba(10,10,10,.025);
-  --glass-border:rgba(10,10,10,.16);
-  --glass-shadow-1:rgba(10,10,10,.06);
-  --glass-shadow-2:rgba(10,10,10,.16);
-  --dim:rgba(10,10,10,.34);
 }
 .invert{
   --ink:#ffffff;
@@ -38,11 +27,6 @@
   --mute:#7e7e7e;
   --hair:rgba(255,255,255,.15);
   --hair-soft:rgba(255,255,255,.07);
-  --glass:rgba(255,255,255,.04);
-  --glass-border:rgba(255,255,255,.15);
-  --glass-shadow-1:rgba(0,0,0,.4);
-  --glass-shadow-2:rgba(0,0,0,.5);
-  --dim:rgba(255,255,255,.4);
   background:var(--paper);
   color:var(--ink);
 }
@@ -85,7 +69,7 @@ section{position:relative;padding:clamp(104px,16vh,190px) 0}
 .roll b.cjk{letter-spacing:.01em;font-size:.9em;top:.04em}
 .h2{font-size:clamp(30px,4.4vw,54px);line-height:1.12;letter-spacing:-.032em}
 .lede{font-size:clamp(16px,1.5vw,19px);line-height:1.7;color:var(--mute);max-width:32ch}
-.eyebrow{font-family:var(--serif);font-size:14px;letter-spacing:0;color:var(--mute);line-height:1}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--mute);line-height:1}
 
 /* ============================================================
    MOTION PRIMITIVES
@@ -138,7 +122,7 @@ nav{
 }
 html.ready nav{opacity:1}
 nav .mark{font-size:14.5px;letter-spacing:-.02em}
-nav .links{display:flex;align-items:center;gap:26px;font-family:var(--serif);font-size:14.5px;letter-spacing:-.01em}
+nav .links{display:flex;align-items:center;gap:26px;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em}
 nav a{text-decoration:none;opacity:.6;transition:opacity .5s var(--soft)}
 nav a:hover{opacity:1}
 nav a[aria-current]{opacity:1}
@@ -162,14 +146,25 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 .hero .display{font-size:clamp(26px,4vw,46px);max-width:44ch;line-height:1.28}
 .hero .lede{margin-top:30px;max-width:38ch}
 
-/* Rolling code-switched examples — hidden for now, not removed. app.js still
-   populates and cycles it; this just keeps it out of layout and view. */
-.hero .roll{display:none}
+/* Two threads that weave past each other and resolve into one line.
+   The whole product, drawn. */
+.braid{
+  width:100%;margin-top:clamp(24px,4vh,56px);
+  pointer-events:none;
+}
+.braid svg{display:block;width:100%;height:auto}
+.braid .thread{
+  fill:none;stroke:var(--ink);stroke-width:1;
+  vector-effect:non-scaling-stroke;
+  transition:stroke-dashoffset 2.4s var(--out);
+}
+.braid .thread.b{transition-delay:.16s}
+.braid .bead{fill:var(--ink);opacity:0}
 
 .cue{
   margin-top:auto;padding:28px 0 26px;
   display:flex;align-items:center;gap:14px;
-  font-family:var(--serif);font-size:13.5px;letter-spacing:0;color:var(--mute);
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.11em;color:var(--mute);
 }
 .cue i{display:block;width:40px;height:1px;background:var(--hair);position:relative;overflow:hidden}
 .cue i::after{
@@ -180,22 +175,24 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 @keyframes cue{0%{transform:translateX(-100%)}55%,100%{transform:translateX(100%)}}
 
 /* ============================================================
-   HUD — the app's own capsule. Lives in the hero now, so every
-   surface below is a theme token — see --glass and --dim in TOKENS —
-   rather than a color baked in for the old black section.
+   HUD — the app's own capsule
    ============================================================ */
+.stage{display:flex;flex-direction:column;align-items:center;text-align:center}
+.stage .h2{max-width:16ch;margin:24px auto 0}
+.stage .lede{margin:22px auto 0;text-align:center;max-width:34ch}
+
 .hud{
-  margin-top:clamp(48px,8vh,88px);
+  margin-top:clamp(64px,10vh,116px);
   display:inline-flex;align-items:center;gap:20px;
   padding:19px 26px;
-  border:1px solid var(--glass-border);
+  border:1px solid rgba(255,255,255,.15);
   border-radius:26px;
-  background:var(--glass);
+  background:rgba(255,255,255,.04);
   backdrop-filter:blur(20px);
-  box-shadow:0 1px 2px var(--glass-shadow-1),0 20px 56px var(--glass-shadow-2);
+  box-shadow:0 1px 2px rgba(0,0,0,.4),0 20px 56px rgba(0,0,0,.5);
   max-width:min(780px,92vw);
   opacity:0;transform:translate3d(0,20px,0) scale(.985);
-  transition:opacity 1.1s var(--out) .62s,transform 1.1s var(--out) .62s;
+  transition:opacity 1.1s var(--out) .2s,transform 1.1s var(--out) .2s;
 }
 .in .hud{opacity:1;transform:none}
 
@@ -211,7 +208,7 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 }
 .hud[data-phase="done"] .meter{opacity:0}
 .hud .meter s{
-  display:block;width:3px;height:26px;border-radius:2px;background:var(--ink);
+  display:block;width:3px;height:26px;border-radius:2px;background:#fff;
   transform:scaleY(.115);transform-origin:center;
 }
 
@@ -223,7 +220,7 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 .hud[data-phase="done"] .check{opacity:1;transform:none}
 .hud .check svg{width:100%;height:100%;display:block}
 .hud .check path{
-  stroke:var(--ink);stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round;
+  stroke:#fff;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round;
   stroke-dasharray:34;stroke-dashoffset:34;
 }
 .hud[data-phase="done"] .check path{animation:tick .5s var(--out) .12s forwards}
@@ -242,13 +239,13 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
    then turns solid on a delay — a trailing wave of uncertainty rather than a
    hard cut-off N characters back. */
 .hud .tok{
-  opacity:0;color:var(--dim);
+  opacity:0;color:rgba(255,255,255,.4);
   transition:opacity .3s var(--soft),color .5s var(--soft) .42s;
 }
-.hud .tok.shown{opacity:1;color:var(--ink)}
+.hud .tok.shown{opacity:1;color:#fff}
 
 .hud .caret{
-  position:absolute;left:0;top:50%;width:1px;height:.95em;background:var(--ink);
+  position:absolute;left:0;top:50%;width:1px;height:.95em;background:#fff;
   transform:translate3d(0,-50%,0);
   transition:transform .34s var(--out),opacity .25s var(--soft);
   animation:blink 1.15s steps(1) infinite;
@@ -258,11 +255,11 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 
 .legend{
   margin-top:32px;display:flex;gap:30px;justify-content:center;flex-wrap:wrap;
-  font-family:var(--serif);font-size:14px;letter-spacing:0;color:var(--mute);
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--mute);
 }
 .legend span{display:inline-flex;align-items:center;gap:9px}
-.legend em{width:15px;height:1px;background:var(--ink);display:block;font-style:normal}
-.legend .dim em{background:var(--dim)}
+.legend em{width:15px;height:1px;background:#fff;display:block;font-style:normal}
+.legend .dim em{background:rgba(255,255,255,.32)}
 
 /* ============================================================
    PRINCIPLES
@@ -281,7 +278,7 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 .idea .body strong{color:var(--ink);font-weight:400}
 
 .diagram{display:flex;flex-direction:column;gap:54px}
-.row .tag{font-family:var(--serif);font-size:14px;letter-spacing:0;color:var(--mute);margin-bottom:20px}
+.row .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--mute);margin-bottom:20px}
 .row .track{position:relative;height:26px;overflow:hidden}
 
 .seg{position:absolute;inset:0;display:flex;gap:16px;align-items:center}
@@ -335,10 +332,6 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 /* ============================================================
    SOURCE
    ============================================================ */
-/* Shorter than the default section padding on the bottom — the braid
-   section right after it brings its own (smaller) top padding, and the
-   two shouldn't stack into one big gap before the sign-off. */
-#source{padding-bottom:clamp(24px,3vh,48px)}
 .source{text-align:center;display:flex;flex-direction:column;align-items:center}
 .source .h2{max-width:14ch;margin-top:24px}
 .source .lede{text-align:center;margin:22px auto 0}
@@ -374,7 +367,7 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .btn{
   margin-top:24px;display:inline-flex;align-items:center;gap:11px;
-  font-family:var(--serif);font-size:15px;letter-spacing:-.01em;
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;
   text-decoration:none;padding:16px 30px;border-radius:999px;
   background:var(--ink);color:var(--paper);
   transition:transform .5s var(--out),opacity .4s var(--soft),box-shadow .4s var(--soft);
@@ -402,29 +395,9 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 .hero .cmd{margin-top:22px}
 .source .cmd{margin-top:40px}
 .fineprint{
-  margin-top:20px;font-family:var(--serif);font-size:14.5px;
-  letter-spacing:0;color:var(--mute);line-height:1.7;
+  margin-top:20px;font-family:var(--mono);font-size:11.5px;
+  letter-spacing:.04em;color:var(--mute);line-height:1.7;
 }
-
-/* ============================================================
-   CLOSING BRAID — the page's sign-off. Two threads weave past each
-   other and resolve into one line, full-bleed above the footer.
-   Tighter than the default section padding — it's a flourish, not
-   a content section, so it doesn't need that much air around it.
-   ============================================================ */
-.coda{padding:clamp(20px,3vh,40px) 0}
-.braid{
-  width:100%;
-  pointer-events:none;
-}
-.braid svg{display:block;width:100%;height:auto}
-.braid .thread{
-  fill:none;stroke:var(--ink);stroke-width:1;
-  vector-effect:non-scaling-stroke;
-  transition:stroke-dashoffset 2.4s var(--out);
-}
-.braid .thread.b{transition-delay:.16s}
-.braid .bead{fill:var(--ink);opacity:0}
 
 /* ============================================================
    ABOUT PAGE
@@ -445,7 +418,7 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
   padding:20px 0;border-top:1px solid var(--hair-soft);
 }
 .spec .row2:last-child{border-bottom:1px solid var(--hair-soft)}
-.spec .k2{font-family:var(--serif);font-size:15px;letter-spacing:0;color:var(--mute)}
+.spec .k2{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;color:var(--mute)}
 .spec .v2{font-size:16.5px;line-height:1.6}
 
 /* A single hairline that draws across, used to break the About page up. */
@@ -460,7 +433,7 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 footer .bar{
   padding:44px 0;border-top:1px solid var(--hair-soft);
   display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
-  font-family:var(--serif);font-size:14px;letter-spacing:0;color:var(--mute);
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--mute);
 }
 footer a{text-decoration:none;transition:color .4s var(--soft)}
 footer a:hover{color:var(--ink)}

@@ -164,7 +164,82 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
 })();
 
 /* ============================================================
-   4. HUD meter — 14 bars easing toward a moving target, the way
+   4. HERO — several threads braid past each other, then damp into
+      one single line. However many voices go in, one sentence
+      comes out. Change THREADS and the figure redraws itself.
+   ============================================================ */
+(() => {
+  const svg = document.getElementById('braid');
+  if (!svg) return;
+
+  const W = 1200, MID = 100, AMP = 54;     // viewBox is 0 0 1200 200
+  const PERIOD = 620;                      // px per full weave
+  const MERGE_FROM = 620, MERGE_TO = 980;  // where the strands resolve into one
+  const STEP = 8;
+
+  const threads = [...svg.querySelectorAll('.thread')];
+  const beads = [...svg.querySelectorAll('.bead')];
+  const N = threads.length;
+
+  // Each strand is the same wave at a different phase, with its amplitude
+  // smoothstepped to zero — so they converge onto one line instead of
+  // being cut off at it.
+  function shape(i) {
+    const phase = (i / N) * Math.PI * 2;
+    let d = '';
+    for (let x = 0; x <= W; x += STEP) {
+      const t = Math.min(1, Math.max(0, (x - MERGE_FROM) / (MERGE_TO - MERGE_FROM)));
+      const damp = 1 - t * t * (3 - 2 * t);
+      const y = MID + AMP * damp * Math.sin((x / PERIOD) * Math.PI * 2 + phase);
+      d += (x ? 'L' : 'M') + x + ' ' + y.toFixed(1);
+    }
+    return d;
+  }
+
+  threads.forEach((p, i) => p.setAttribute('d', shape(i)));
+
+  const lens = threads.map(p => p.getTotalLength());
+  threads.forEach(arm);
+  void svg.getBoundingClientRect();   // commit the undrawn state before releasing
+
+  if (REDUCED) { threads.forEach(p => release(p, 0)); return; }
+
+  threads.forEach((p, i) => {
+    p.style.transitionDelay = (i * 0.14) + 's';
+    release(p, 2600 + i * 140);
+  });
+
+  // A frozen bead stranded mid-thread reads as a bug, so park them.
+  onHide.push(() => beads.forEach(b => { b.style.opacity = 0; }));
+
+  const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const RUN = 5600, HOLD = 1100, FADE = 700, START = 2300;
+  const cycle = RUN + HOLD + FADE;
+  let t0 = null;
+
+  requestAnimationFrame(function frame(ts) {
+    requestAnimationFrame(frame);
+    if (t0 === null) t0 = ts;
+    const t = ts - t0 - START;
+    if (t < 0) return;
+
+    const p = t % cycle;
+    let u, a;
+    if (p < RUN) { u = ease(p / RUN); a = Math.min(1, p / 420); }
+    else if (p < RUN + HOLD) { u = 1; a = 1; }
+    else { u = 1; a = 1 - (p - RUN - HOLD) / FADE; }
+
+    beads.forEach((b, i) => {
+      const pt = threads[i].getPointAtLength(u * lens[i]);
+      b.setAttribute('cx', pt.x);
+      b.setAttribute('cy', pt.y);
+      b.style.opacity = a;
+    });
+  });
+})();
+
+/* ============================================================
+   5. HUD meter — 14 bars easing toward a moving target, the way
       AppState smooths the mic level. Transform only, so it glides.
    ============================================================ */
 (() => {
@@ -205,7 +280,7 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
 })();
 
 /* ============================================================
-   5. HUD transcript — LocalAgreement-2, dramatised. A trailing
+   6. HUD transcript — LocalAgreement-2, dramatised. A trailing
       window stays dim; everything behind it has settled.
    ============================================================ */
 (() => {
@@ -312,81 +387,6 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
         else reveal(e.i);
       }
       if (clock >= span) next();
-    });
-  });
-})();
-
-/* ============================================================
-   6. FOOTER — several threads braid past each other, then damp into
-      one single line. However many voices go in, one sentence
-      comes out. Change THREADS and the figure redraws itself.
-   ============================================================ */
-(() => {
-  const svg = document.getElementById('braid');
-  if (!svg) return;
-
-  const W = 1200, MID = 100, AMP = 54;     // viewBox is 0 0 1200 200
-  const PERIOD = 620;                      // px per full weave
-  const MERGE_FROM = 620, MERGE_TO = 980;  // where the strands resolve into one
-  const STEP = 8;
-
-  const threads = [...svg.querySelectorAll('.thread')];
-  const beads = [...svg.querySelectorAll('.bead')];
-  const N = threads.length;
-
-  // Each strand is the same wave at a different phase, with its amplitude
-  // smoothstepped to zero — so they converge onto one line instead of
-  // being cut off at it.
-  function shape(i) {
-    const phase = (i / N) * Math.PI * 2;
-    let d = '';
-    for (let x = 0; x <= W; x += STEP) {
-      const t = Math.min(1, Math.max(0, (x - MERGE_FROM) / (MERGE_TO - MERGE_FROM)));
-      const damp = 1 - t * t * (3 - 2 * t);
-      const y = MID + AMP * damp * Math.sin((x / PERIOD) * Math.PI * 2 + phase);
-      d += (x ? 'L' : 'M') + x + ' ' + y.toFixed(1);
-    }
-    return d;
-  }
-
-  threads.forEach((p, i) => p.setAttribute('d', shape(i)));
-
-  const lens = threads.map(p => p.getTotalLength());
-  threads.forEach(arm);
-  void svg.getBoundingClientRect();   // commit the undrawn state before releasing
-
-  if (REDUCED) { threads.forEach(p => release(p, 0)); return; }
-
-  threads.forEach((p, i) => {
-    p.style.transitionDelay = (i * 0.14) + 's';
-    release(p, 2600 + i * 140);
-  });
-
-  // A frozen bead stranded mid-thread reads as a bug, so park them.
-  onHide.push(() => beads.forEach(b => { b.style.opacity = 0; }));
-
-  const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-  const RUN = 5600, HOLD = 1100, FADE = 700, START = 2300;
-  const cycle = RUN + HOLD + FADE;
-  let t0 = null;
-
-  requestAnimationFrame(function frame(ts) {
-    requestAnimationFrame(frame);
-    if (t0 === null) t0 = ts;
-    const t = ts - t0 - START;
-    if (t < 0) return;
-
-    const p = t % cycle;
-    let u, a;
-    if (p < RUN) { u = ease(p / RUN); a = Math.min(1, p / 420); }
-    else if (p < RUN + HOLD) { u = 1; a = 1; }
-    else { u = 1; a = 1 - (p - RUN - HOLD) / FADE; }
-
-    beads.forEach((b, i) => {
-      const pt = threads[i].getPointAtLength(u * lens[i]);
-      b.setAttribute('cx', pt.x);
-      b.setAttribute('cy', pt.y);
-      b.style.opacity = a;
     });
   });
 })();
