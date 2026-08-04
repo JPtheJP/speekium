@@ -56,10 +56,15 @@ private struct GeneralTab: View {
                     .font(.callout)
             }
 
-            Section("Insertion") {
+            Section("Output") {
                 Toggle(isOn: $settings.autoInsert) {
                     Text("Insert at cursor")
-                    Text("When off, the transcript only goes to the clipboard.")
+                    Text("Paste the finished transcript into the active app.")
+                }
+
+                Toggle(isOn: $settings.copyToClipboard) {
+                    Text("Copy to clipboard")
+                    Text("Keep the finished transcript on the clipboard.")
                 }
             }
 

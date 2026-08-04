@@ -242,11 +242,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state.tail = ""
             state.phase = .inserted
 
-            if settings.autoInsert {
-                TextInserter.insert(text)
-            } else {
-                TextInserter.copyOnly(text)
-            }
+            TextInserter.deliver(
+                text,
+                insertAtCursor: settings.autoInsert,
+                copyToClipboard: settings.copyToClipboard
+            )
             settings.playFeedback()
             scheduleDismiss(after: 0.42)
 

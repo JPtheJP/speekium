@@ -89,9 +89,14 @@ final class Settings: ObservableObject {
         didSet { defaults.set(activationMode.rawValue, forKey: Keys.activationMode); onChange?() }
     }
 
-    /// Insert at the cursor. When off, the transcript only goes to the clipboard.
+    /// Insert the transcript at the active app's cursor.
     @Published var autoInsert: Bool {
         didSet { defaults.set(autoInsert, forKey: Keys.autoInsert) }
+    }
+
+    /// Keep the finished transcript on the clipboard after dictation.
+    @Published var copyToClipboard: Bool {
+        didSet { defaults.set(copyToClipboard, forKey: Keys.copyToClipboard) }
     }
 
     @Published var playSound: Bool {
@@ -217,6 +222,7 @@ final class Settings: ObservableObject {
         static let triggerKey = "triggerKey"
         static let activationMode = "activationMode"
         static let autoInsert = "autoInsert"
+        static let copyToClipboard = "copyToClipboard"
         static let playSound = "playSound"
         static let insertSound = "insertSound"   // pre-pairs; read once to migrate
         static let soundTheme = "soundTheme"
@@ -231,6 +237,7 @@ final class Settings: ObservableObject {
         activationMode = ActivationMode(rawValue: defaults.string(forKey: Keys.activationMode) ?? "")
             ?? .hold
         autoInsert = defaults.object(forKey: Keys.autoInsert) as? Bool ?? true
+        copyToClipboard = defaults.object(forKey: Keys.copyToClipboard) as? Bool ?? true
         playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? false
         // Migration: before pairs, the choice lived in `insertSound` as a bare
         // alert-sound name. Carry it over so an existing setting is preserved

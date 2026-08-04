@@ -1,12 +1,54 @@
 import AppKit
 
-/// Inserts text into whichever app has focus.
+/// Delivers text to whichever app has focus and/or the clipboard.
 ///
 /// Pasteboard + Cmd-V rather than synthesised per-character key events: unicode
 /// keystroke injection is unreliable for CJK, and this path handles mixed
-/// scripts correctly. The previous pasteboard contents are restored afterwards.
+/// scripts correctly. When clipboard retention is disabled, the previous
+/// pasteboard contents are restored after the paste.
 enum TextInserter {
-    static func insert(_ text: String) {
+    private struct PasteboardSnapshot {
+        let items: [[(NSPasteboard.PasteboardType, Data)]]
+
+        init(_ pasteboard: NSPasteboard) {
+            items = (pasteboard.pasteboardItems ?? []).map { item in
+                item.types.compactMap { type in
+                    guard let data = item.data(forType: type) else { return nil }
+                    return (type, data)
+                }
+            }
+        }
+
+        func restore(to pasteboard: NSPasteboard) {
+            pasteboard.clearContents()
+            let restored = items.map { representations -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in representations {
+                    item.setData(data, forType: type)
+                }
+                return item
+            }
+            guard !restored.isEmpty else { return }
+            pasteboard.writeObjects(restored)
+        }
+    }
+
+    /// Performs the requested output actions. Insertion always uses a
+    /// temporary pasteboard write; `copyToClipboard` controls whether that
+    /// write is retained or restored after the synthetic paste.
+    static func deliver(_ text: String, insertAtCursor: Bool, copyToClipboard: Bool) {
+        guard !text.isEmpty else { return }
+
+        if insertAtCursor {
+            insert(text, retainOnClipboard: copyToClipboard)
+        } else if copyToClipboard {
+            copyOnly(text)
+        } else {
+            Log.write("transcript delivered nowhere (both output options off)")
+        }
+    }
+
+    private static func insert(_ text: String, retainOnClipboard: Bool) {
         guard !text.isEmpty else { return }
 
         let front = NSWorkspace.shared.frontmostApplication
@@ -14,11 +56,12 @@ enum TextInserter {
                   + "(\(front?.localizedName ?? "?")) trusted=\(AXIsProcessTrusted())")
 
         let pb = NSPasteboard.general
-        let saved = pb.string(forType: .string)
+        let saved = retainOnClipboard ? nil : PasteboardSnapshot(pb)
 
         pb.clearContents()
         let ok = pb.setString(text, forType: .string)
         Log.write("  pasteboard write=\(ok) readback=\((pb.string(forType: .string) ?? "").prefix(20))")
+        let insertedChangeCount = pb.changeCount
 
         // The pasteboard write is asynchronous from the front app's point of
         // view; posting Cmd-V in the same runloop tick often pastes stale
@@ -28,8 +71,14 @@ enum TextInserter {
 
             if let saved {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    pb.clearContents()
-                    pb.setString(saved, forType: .string)
+                    // Do not overwrite a clipboard update made by the user or
+                    // the destination app while the paste was in flight.
+                    guard pb.changeCount == insertedChangeCount else {
+                        Log.write("  skipped clipboard restore: clipboard changed")
+                        return
+                    }
+                    saved.restore(to: pb)
+                    Log.write("  restored previous clipboard contents")
                 }
             }
         }
@@ -41,7 +90,7 @@ enum TextInserter {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
-        Log.write("copied \(text.count) chars (auto-insert off)")
+        Log.write("copied \(text.count) chars (insert at cursor off)")
     }
 
     private static func pressCommandV() {
