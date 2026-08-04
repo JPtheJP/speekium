@@ -1,0 +1,8 @@
+# Runtime used by WhisprStream's Python ASR sidecar.
+# These versions are the known-good Apple Silicon environment used to build
+# the app. Keep this file in sync with the venv when upgrading the model stack.
+mlx==0.32.0
+mlx-qwen3-asr==0.3.5
+numpy==2.5.1
+huggingface-hub==1.26.0
+

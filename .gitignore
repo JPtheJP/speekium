@@ -8,12 +8,13 @@ jargon.wav
 __pycache__/
 *.pyc
 
+# Locally built application bundle
+WhisprStream.app/
+
 # ML model weights
 models/
 
 # Swift build artifacts
 WhisprStream/.build/
-WhisprStream.app/
-
 # macOS
 .DS_Store
