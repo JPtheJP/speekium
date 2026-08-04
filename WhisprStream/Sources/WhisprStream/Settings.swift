@@ -164,26 +164,29 @@ final class Settings: ObservableObject {
         }
     }
 
-    /// Domain terms biasing decoding — useful for technical jargon and names.
+    /// Vocabulary entries used to bias decoding. Each entry may be a word or a
+    /// phrase; the array is the source of truth so spaces do not become data
+    /// delimiters.
     ///
-    /// Pushed to the running sidecar on every edit. Persisting alone is not
-    /// enough: the sidecar reads its startup value from the environment, so a
-    /// change made after launch would otherwise not apply until the next launch.
-    @Published var contextTerms: String {
+    /// The running sidecar receives a newline-separated prompt whenever this
+    /// array changes. Persisting alone is not enough: the sidecar reads its
+    /// startup value from the environment, so edits must also be pushed live.
+    @Published private(set) var vocabularyEntries: [String] {
         didSet {
-            defaults.set(contextTerms, forKey: Keys.contextTerms)
-            onContextChange?(contextTerms)
+            defaults.set(vocabularyEntries, forKey: Keys.vocabularyEntries)
+            onContextChange?(vocabularyContext)
         }
     }
 
-    /// The vocabulary as discrete terms.
-    ///
-    /// Storage stays one whitespace-joined string: that is the exact text the
-    /// model's system prompt receives, so keeping it as the source of truth means
-    /// the UI can never drift from what is actually sent.
-    var contextTermList: [String] {
-        get { contextTerms.split(whereSeparator: \.isWhitespace).map(String.init) }
-        set { contextTerms = newValue.joined(separator: " ") }
+    /// Text sent to the ASR model's context prompt.
+    var vocabularyContext: String {
+        vocabularyEntries.joined(separator: "\n")
+    }
+
+    /// Replaces the complete vocabulary after applying the same normalization
+    /// and case-sensitive de-duplication used by manual entry and imports.
+    func setVocabulary(_ entries: [String]) {
+        vocabularyEntries = VocabularyEntry.normalizedUnique(entries)
     }
 
     /// Which speech model the sidecar loads.
@@ -227,6 +230,7 @@ final class Settings: ObservableObject {
         static let insertSound = "insertSound"   // pre-pairs; read once to migrate
         static let soundTheme = "soundTheme"
         static let contextTerms = "contextTerms"
+        static let vocabularyEntries = "vocabularyEntries"
         static let model = "model"
         static let onboarded = "hasCompletedOnboarding"
     }
@@ -246,7 +250,18 @@ final class Settings: ObservableObject {
             ?? SoundTheme(storageValue: defaults.string(forKey: Keys.insertSound) ?? "")
             ?? .pair(.openResolve)
 
-        contextTerms = defaults.string(forKey: Keys.contextTerms) ?? ""
+        if let stored = defaults.array(forKey: Keys.vocabularyEntries) as? [String] {
+            vocabularyEntries = VocabularyEntry.normalizedUnique(stored)
+        } else {
+            // Legacy versions stored a whitespace-delimited string. That format
+            // cannot recover phrases, but migrating it preserves every existing
+            // single-word entry and gives future edits a lossless representation.
+            let legacy = defaults.string(forKey: Keys.contextTerms) ?? ""
+            let entries = legacy.split(whereSeparator: \.isWhitespace).map(String.init)
+            let migrated = VocabularyEntry.normalizedUnique(entries)
+            defaults.set(migrated, forKey: Keys.vocabularyEntries)
+            vocabularyEntries = migrated
+        }
         model = ASRModel(rawValue: defaults.string(forKey: Keys.model) ?? "") ?? .small
         hasCompletedOnboarding = defaults.bool(forKey: Keys.onboarded)
 

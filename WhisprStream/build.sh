@@ -70,7 +70,11 @@ PLIST
 # different app to TCC and silently drops the Accessibility grant. A self-signed
 # certificate keeps one identity across rebuilds, so the grant sticks.
 IDENTITY="-"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "WhisprStream Self-Signed"; then
+# The -v flag filters to identities whose certificate chain is trusted. A local
+# self-signed identity can still sign successfully (and gives TCC a stable leaf
+# certificate) even when Keychain reports the chain as untrusted, so look
+# through all matching code-signing identities instead.
+if security find-identity -p codesigning 2>/dev/null | grep -q "WhisprStream Self-Signed"; then
     IDENTITY="WhisprStream Self-Signed"
     echo "▸ signing with stable identity"
 else

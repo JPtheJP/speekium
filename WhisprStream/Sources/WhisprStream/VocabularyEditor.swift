@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// The Vocabulary block in General settings.
@@ -36,23 +37,36 @@ struct VocabularySection: View {
     /// chip. Silently swallowing the word reads as the app dropping input.
     @State private var duplicateTerm: String?
 
-    @State private var lastRemoval: Removal?
+    @State private var lastChange: VocabularyChange?
+    @State private var isImporting = false
+    @State private var isExporting = false
+    @State private var exportDocument = VocabularyDocument(entries: [])
+    @State private var importPreview: ImportPreview?
+    @State private var transferError: String?
     @FocusState private var entryFocused: Bool
 
     private let spring = Animation.spring(response: 0.3, dampingFraction: 0.8)
 
-    /// A removal, with the whole list as it stood before it.
+    /// A reversible vocabulary mutation, with the whole list as it stood
+    /// before the change.
     ///
     /// Snapshotting the list rather than just the term means Undo also restores
     /// the term's original position, so recovering doesn't quietly reorder the
     /// vocabulary.
-    private struct Removal: Equatable {
+    private struct VocabularyChange: Equatable, Identifiable {
         let id = UUID()
-        let term: String
+        let summary: String
         let previous: [String]
     }
 
-    private var terms: [String] { settings.contextTermList }
+    private struct ImportPreview: Identifiable {
+        let id = UUID()
+        let entries: [String]
+        let fileDuplicates: Int
+        let existingMatches: Int
+    }
+
+    private var terms: [String] { settings.vocabularyEntries }
 
     var body: some View {
         Section {
@@ -73,8 +87,8 @@ struct VocabularySection: View {
                 .padding(.vertical, 2)
             }
 
-            if let removal = lastRemoval {
-                undoRow(removal)
+            if let change = lastChange {
+                undoRow(change)
             }
         } header: {
             HStack {
@@ -86,27 +100,100 @@ struct VocabularySection: View {
                         .font(.callout.monospacedDigit())
                         .transition(.opacity)
                 }
+
+                Menu {
+                    Button {
+                        isImporting = true
+                    } label: {
+                        Label("Import Vocabulary…", systemImage: "square.and.arrow.down")
+                    }
+
+                    Button {
+                        exportDocument = VocabularyDocument(entries: terms)
+                        isExporting = true
+                    } label: {
+                        Label("Export Vocabulary…", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(terms.isEmpty)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .help("Import or export vocabulary")
             }
         } footer: {
             footer
         }
         .animation(spring, value: terms)
-        .animation(spring, value: lastRemoval)
+        .animation(spring, value: lastChange)
         .animation(spring, value: armedTerm)
         // Auto-hide the Undo row, but only after long enough to notice it. The
-        // `id:` restarts the clock on each new removal instead of letting an
-        // earlier one's timer close the row on a fresh deletion.
-        .task(id: lastRemoval?.id) {
-            guard lastRemoval != nil else { return }
+        // `id:` restarts the clock on each new change instead of letting an
+        // earlier timer close the row on a fresh deletion or import.
+        .task(id: lastChange?.id) {
+            guard lastChange != nil else { return }
             try? await Task.sleep(for: .seconds(12))
             guard !Task.isCancelled else { return }
-            lastRemoval = nil
+            lastChange = nil
         }
         .task(id: duplicateTerm) {
             guard duplicateTerm != nil else { return }
             try? await Task.sleep(for: .milliseconds(900))
             guard !Task.isCancelled else { return }
             duplicateTerm = nil
+        }
+        .fileImporter(
+            isPresented: $isImporting,
+            allowedContentTypes: [VocabularyTransfer.contentType],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case let .success(urls):
+                guard let url = urls.first else { return }
+                prepareImport(from: url)
+            case let .failure(error):
+                if (error as NSError).code != NSUserCancelledError {
+                    transferError = error.localizedDescription
+                }
+            }
+        }
+        .fileExporter(
+            isPresented: $isExporting,
+            document: exportDocument,
+            contentType: VocabularyTransfer.contentType,
+            defaultFilename: "WhisprStream Vocabulary"
+        ) { result in
+            if case let .failure(error) = result,
+               (error as NSError).code != NSUserCancelledError {
+                transferError = error.localizedDescription
+            }
+        }
+        .alert(item: $importPreview) { preview in
+            let message = "This file contains \(preview.entries.count) unique entries. "
+                + "\(preview.fileDuplicates) duplicate lines were ignored. "
+                + "\(preview.existingMatches) already exist in the current list."
+            return Alert(
+                title: Text("Import Vocabulary"),
+                message: Text(message),
+                primaryButton: .default(Text("Add to Existing")) {
+                    applyImport(preview, replacing: false)
+                },
+                secondaryButton: .destructive(Text("Replace Existing")) {
+                    applyImport(preview, replacing: true)
+                }
+            )
+        }
+        .alert(
+            "Vocabulary Transfer Failed",
+            isPresented: Binding(
+                get: { transferError != nil },
+                set: { if !$0 { transferError = nil } }
+            )
+        ) {
+            Button("OK") { transferError = nil }
+        } message: {
+            Text(transferError ?? "Unknown error")
         }
     }
 
@@ -118,15 +205,19 @@ struct VocabularySection: View {
                 .foregroundStyle(draft.isEmpty ? .secondary : Color.accentColor)
                 .font(.system(size: 13))
 
-            TextField("Add a name or term", text: $draft)
+            TextField(
+                "",
+                text: $draft,
+                prompt: Text("Add a word or phrase")
+            )
+                .labelsHidden()
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, design: .rounded))
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .focused($entryFocused)
                 .onSubmit { commitDraft() }
-                .onChange(of: draft) { _, _ in
-                    armedTerm = nil
-                    consumeSeparators()
-                }
+                .onChange(of: draft) { _, _ in armedTerm = nil }
                 // Backspace on an empty field arms the last chip instead of
                 // removing it outright. `.ignored` while there is text to
                 // delete leaves normal editing completely untouched.
@@ -150,7 +241,7 @@ struct VocabularySection: View {
                     return .handled
                 }
                 .onChange(of: entryFocused) { _, focused in
-                    if !focused { armedTerm = nil; commitDraft() }
+                    if !focused { armedTerm = nil }
                 }
 
             if !draft.isEmpty {
@@ -159,22 +250,36 @@ struct VocabularySection: View {
                     .transition(.opacity)
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(0.055))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    entryFocused ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.12),
+                    lineWidth: entryFocused ? 1.2 : 0.8
+                )
+        }
         .animation(spring, value: draft.isEmpty)
-        // The whole row is the target: a bare plain text field is a small,
-        // invisible strip to aim at.
+        .animation(.easeOut(duration: 0.15), value: entryFocused)
+        // The whole rounded row is the target so the field remains easy to
+        // focus even when the draft is empty.
         .contentShape(Rectangle())
         .onTapGesture { entryFocused = true }
     }
 
-    private func undoRow(_ removal: Removal) -> some View {
+    private func undoRow(_ change: VocabularyChange) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "arrow.uturn.backward")
                 .font(.system(size: 11))
-            Text("Removed \(Text("“\(removal.term)”").fontWeight(.medium))")
+            Text(change.summary)
             Spacer()
             Button("Undo") {
-                settings.contextTermList = removal.previous
-                lastRemoval = nil
+                settings.setVocabulary(change.previous)
+                lastChange = nil
             }
             .controlSize(.small)
         }
@@ -185,7 +290,7 @@ struct VocabularySection: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Names and jargon you say often. Type a term and press space.")
+            Text("Names and jargon you say often. Type a word or phrase, then press Return.")
 
             // Measured, not guessed: lowercase `claude` was enough to beat
             // `Cloud`, but lowercase `codex` did not beat `CodeX`.
@@ -203,30 +308,13 @@ struct VocabularySection: View {
 
     // MARK: - Mutation
 
-    /// Commits every complete word in the draft, leaving any unterminated tail
-    /// in the field.
-    ///
-    /// Splitting the whole string rather than just the last separator is what
-    /// makes pasting a ready-made list ("Claude Codex 期末考") work in one go.
-    private func consumeSeparators() {
-        guard draft.contains(where: isSeparator) else { return }
-        let endsOpen = !(draft.last.map(isSeparator) ?? false)
-        let pieces = draft.split(whereSeparator: isSeparator).map(String.init)
-        let complete = endsOpen ? Array(pieces.dropLast()) : pieces
-        for piece in complete { add(piece) }
-        draft = endsOpen ? (pieces.last ?? "") : ""
-    }
-
     private func commitDraft() {
-        let term = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty else { return }
-        add(term)
+        add(draft)
         draft = ""
     }
 
     private func add(_ raw: String) {
-        let term = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty else { return }
+        guard let term = VocabularyEntry.normalize(raw) else { return }
         // Case-sensitive on purpose: casing is the lever that makes biasing
         // work at all, so `Codex` and `codex` are genuinely different entries.
         guard !terms.contains(term) else {
@@ -235,20 +323,49 @@ struct VocabularySection: View {
         }
         // The pending snapshot predates this term, so undoing after an add would
         // silently swallow it. Retire the offer instead of restoring a stale list.
-        lastRemoval = nil
-        settings.contextTermList = terms + [term]
+        lastChange = nil
+        settings.setVocabulary(terms + [term])
     }
 
     private func remove(_ term: String) {
         let previous = terms
         guard previous.contains(term) else { return }
         armedTerm = nil
-        settings.contextTermList = previous.filter { $0 != term }
-        lastRemoval = Removal(term: term, previous: previous)
+        settings.setVocabulary(previous.filter { $0 != term })
+        lastChange = VocabularyChange(summary: "Removed \(term)", previous: previous)
     }
 
-    private func isSeparator(_ c: Character) -> Bool {
-        c.isWhitespace || c == "," || c == "、" || c == "，"
+    private func prepareImport(from url: URL) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let parsed = try VocabularyTransfer.parse(Data(contentsOf: url))
+            let existingMatches = parsed.entries.filter { terms.contains($0) }.count
+            importPreview = ImportPreview(
+                entries: parsed.entries,
+                fileDuplicates: parsed.duplicatesSkipped,
+                existingMatches: existingMatches
+            )
+        } catch {
+            transferError = error.localizedDescription
+        }
+    }
+
+    private func applyImport(_ preview: ImportPreview, replacing: Bool) {
+        let previous = terms
+        let updated = replacing
+            ? preview.entries
+            : VocabularyEntry.normalizedUnique(previous + preview.entries)
+        guard updated != previous else { return }
+
+        settings.setVocabulary(updated)
+        let summary = replacing
+            ? "Replaced vocabulary with \(updated.count) entries"
+            : "Imported \(updated.count - previous.count) entries"
+        lastChange = VocabularyChange(summary: summary, previous: previous)
     }
 }
 

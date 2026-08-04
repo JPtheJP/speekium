@@ -106,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             script: script,
             model: env["WHISPR_MODEL"] ?? settings.model.rawValue,
             bits: Int(env["WHISPR_BITS"] ?? "8") ?? 8,
-            context: settings.contextTerms
+            context: settings.vocabularyContext
         )
     }
 
