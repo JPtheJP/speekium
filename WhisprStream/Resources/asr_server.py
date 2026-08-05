@@ -32,7 +32,10 @@ SAMPLE_RATE = 16000
 MIN_SECONDS = 0.3
 POLL_INTERVAL = 0.02
 MIN_NEW_AUDIO = 0.15
-MAX_BUFFER_SEC = 45.0
+# Swift stops dictation at 45 seconds. Keep several seconds of transport/timer
+# headroom so the rolling buffer can never trim the beginning before that stop
+# command reaches the sidecar.
+MAX_BUFFER_SEC = 50.0
 
 # A completed preview may be reused when the only audio it has not seen is a
 # short, confidently silent tail. These thresholds are deliberately

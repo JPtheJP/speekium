@@ -5,11 +5,11 @@ final class TranscriptExpanderTests: XCTestCase {
     func testPunctuationCanBeReplacedWithSpace() {
         XCTAssertEqual(
             TranscriptFormatter.format("Hello, world!", usePunctuation: false),
-            "Hello, world "
+            "Hello, world"
         )
         XCTAssertEqual(
             TranscriptFormatter.format("你好。", usePunctuation: false),
-            "你好 "
+            "你好"
         )
     }
 
@@ -23,8 +23,30 @@ final class TranscriptExpanderTests: XCTestCase {
     func testPunctuationFormatterPreservesInternalPunctuation() {
         XCTAssertEqual(
             TranscriptFormatter.format("Use example.com now.", usePunctuation: false),
-            "Use example.com now "
+            "Use example.com now"
         )
+    }
+
+    func testPunctuationFormatterHandlesClosingQuotesAndBrackets() {
+        XCTAssertEqual(
+            TranscriptFormatter.format("He said \"hello.\"", usePunctuation: false),
+            "He said \"hello\""
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.format("她说「你好。」", usePunctuation: false),
+            "她说「你好」"
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.format("Done.)", usePunctuation: false),
+            "Done)"
+        )
+    }
+
+    func testInsertionTextAddsOneSeparatorWithoutPollutingFormattedText() {
+        XCTAssertEqual(TranscriptFormatter.textForInsertion("Hello."), "Hello. ")
+        XCTAssertEqual(TranscriptFormatter.textForInsertion("你好"), "你好 ")
+        XCTAssertEqual(TranscriptFormatter.textForInsertion("already spaced "), "already spaced ")
+        XCTAssertEqual(TranscriptFormatter.textForInsertion("line break\n"), "line break\n")
     }
 
     func testSpokenNumbersBecomeDigits() {

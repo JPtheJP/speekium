@@ -54,7 +54,16 @@ final class HotKeyMonitor {
         start()
     }
 
-    private func handle(_ event: NSEvent) {
+    /// Synchronize the monitor after dictation is stopped by something other
+    /// than the trigger key, such as the recording time limit. In tap mode this
+    /// makes the very next press start again instead of acting like a stale stop.
+    func cancelActiveDictation() {
+        isActive = false
+    }
+
+    /// Internal so the modifier-edge state machine can be exercised without
+    /// installing global event monitors in the test process.
+    func handle(_ event: NSEvent) {
         guard event.keyCode == key.keyCode else { return }
         let down = event.modifierFlags.contains(key.flag)
         guard down != isKeyDown else { return }   // ignore repeats

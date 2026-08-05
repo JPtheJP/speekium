@@ -26,7 +26,7 @@ final class AppState: ObservableObject {
     var onDictationLimitReached: (() -> Void)?
 
     private var dictationTimer: Timer?
-    private var dictationStartedAt: Date?
+    private var dictationStartedAtUptime: TimeInterval?
     private var didReachDictationLimit = false
 
     /// Text shown in the HUD: settled prefix plus the still-changing tail.
@@ -65,26 +65,30 @@ final class AppState: ObservableObject {
         stopDictationTimer()
         dictationElapsedSeconds = 0
         didReachDictationLimit = false
-        let startedAt = Date()
-        dictationStartedAt = startedAt
-        dictationTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        dictationStartedAtUptime = startedAt
+        let timer = Timer(timeInterval: 0.1, repeats: true) {
             [weak self] _ in
             guard let self else { return }
             MainActor.assumeIsolated {
-                guard let startedAt = self.dictationStartedAt else { return }
-                self.dictationElapsedSeconds = Date().timeIntervalSince(startedAt)
+                guard let startedAt = self.dictationStartedAtUptime else { return }
+                self.dictationElapsedSeconds = ProcessInfo.processInfo.systemUptime - startedAt
                 guard self.dictationElapsedSeconds >= Self.dictationLimitSeconds,
                       !self.didReachDictationLimit else { return }
                 self.didReachDictationLimit = true
                 self.onDictationLimitReached?()
             }
         }
+        dictationTimer = timer
+        // Keep the safety limit advancing during menu tracking and the HUD's
+        // custom drag gesture, both of which run the main loop in tracking mode.
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     func stopDictationTimer() {
         dictationTimer?.invalidate()
         dictationTimer = nil
-        dictationStartedAt = nil
+        dictationStartedAtUptime = nil
         didReachDictationLimit = false
     }
 }

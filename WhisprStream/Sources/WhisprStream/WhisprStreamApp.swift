@@ -28,7 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = HUDPanel(state: state)
-        state.onDictationLimitReached = { [weak self] in self?.endDictation() }
+        state.onDictationLimitReached = { [weak self] in
+            guard let self else { return }
+            self.hotkey.cancelActiveDictation()
+            self.endDictation()
+        }
         setUpStatusItem()
 
         let trusted = AXIsProcessTrusted()
@@ -254,15 +258,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let matchedID = expansion.matchedShortcutID {
                 Log.write("voice shortcut matched id=\(matchedID) inputChars=\(normalizedText.count) outputChars=\(expansion.text.count)")
             }
-            let deliveredText = settings.usePunctuation
-                ? expansion.text
-                : (expansion.text.last?.isWhitespace == true ? expansion.text : expansion.text + " ")
+            let deliveredText = expansion.text
+            guard !deliveredText.isEmpty else {
+                dismissNow()
+                return
+            }
+            let insertionText = TranscriptFormatter.textForInsertion(deliveredText)
             state.committed = deliveredText
             state.tail = ""
             state.phase = .inserted
 
             TextInserter.deliver(
                 deliveredText,
+                insertionText: insertionText,
                 insertAtCursor: settings.autoInsert,
                 copyToClipboard: settings.copyToClipboard
             )

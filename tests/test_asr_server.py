@@ -13,6 +13,9 @@ import asr_server  # noqa: E402
 
 
 class SilenceDetectionTests(unittest.TestCase):
+    def test_audio_buffer_has_headroom_over_ui_limit(self):
+        self.assertGreater(asr_server.MAX_BUFFER_SEC, 45.0)
+
     def test_room_noise_is_silence(self):
         rng = np.random.default_rng(7)
         audio = rng.normal(0, 0.008, int(0.4 * asr_server.SAMPLE_RATE)).astype(np.float32)

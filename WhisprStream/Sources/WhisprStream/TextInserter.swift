@@ -33,14 +33,22 @@ enum TextInserter {
         }
     }
 
-    /// Performs the requested output actions. Insertion always uses a
-    /// temporary pasteboard write; `copyToClipboard` controls whether that
-    /// write is retained or restored after the synthetic paste.
-    static func deliver(_ text: String, insertAtCursor: Bool, copyToClipboard: Bool) {
+    /// Performs the requested output actions. `text` is the clean transcript
+    /// retained on the clipboard; `insertionText` may include cursor-separating
+    /// whitespace used only for the synthetic paste.
+    static func deliver(
+        _ text: String,
+        insertionText: String? = nil,
+        insertAtCursor: Bool,
+        copyToClipboard: Bool
+    ) {
         guard !text.isEmpty else { return }
 
         if insertAtCursor {
-            insert(text, retainOnClipboard: copyToClipboard)
+            insert(
+                insertionText ?? text,
+                clipboardAfterPaste: copyToClipboard ? text : nil
+            )
         } else if copyToClipboard {
             copyOnly(text)
         } else {
@@ -48,7 +56,7 @@ enum TextInserter {
         }
     }
 
-    private static func insert(_ text: String, retainOnClipboard: Bool) {
+    private static func insert(_ text: String, clipboardAfterPaste: String?) {
         guard !text.isEmpty else { return }
 
         let front = NSWorkspace.shared.frontmostApplication
@@ -56,7 +64,7 @@ enum TextInserter {
                   + "(\(front?.localizedName ?? "?")) trusted=\(AXIsProcessTrusted())")
 
         let pb = NSPasteboard.general
-        let saved = retainOnClipboard ? nil : PasteboardSnapshot(pb)
+        let saved = clipboardAfterPaste == nil ? PasteboardSnapshot(pb) : nil
 
         pb.clearContents()
         let ok = pb.setString(text, forType: .string)
@@ -69,7 +77,7 @@ enum TextInserter {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             pressCommandV()
 
-            if let saved {
+            if saved != nil || clipboardAfterPaste != text {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     // Do not overwrite a clipboard update made by the user or
                     // the destination app while the paste was in flight.
@@ -77,8 +85,14 @@ enum TextInserter {
                         Log.write("  skipped clipboard restore: clipboard changed")
                         return
                     }
-                    saved.restore(to: pb)
-                    Log.write("  restored previous clipboard contents")
+                    if let saved {
+                        saved.restore(to: pb)
+                        Log.write("  restored previous clipboard contents")
+                    } else if let clipboardAfterPaste {
+                        pb.clearContents()
+                        pb.setString(clipboardAfterPaste, forType: .string)
+                        Log.write("  retained clean transcript on clipboard")
+                    }
                 }
             }
         }

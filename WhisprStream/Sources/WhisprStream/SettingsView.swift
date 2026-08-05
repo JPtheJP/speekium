@@ -74,7 +74,7 @@ private struct GeneralTab: View {
                     Text("Use punctuation")
                     Text(settings.usePunctuation
                          ? "Keep sentence-ending punctuation from dictation."
-                         : "End each dictation with a space instead.")
+                         : "Remove sentence-ending punctuation from dictation.")
                 }
             }
 
