@@ -1,5 +1,33 @@
 # WhisprStream — handoff
 
+## Voice Shortcuts
+
+Voice Shortcuts are implemented in the native app. Users can save a spoken
+trigger (a single word or phrase) and literal replacement text from the
+Shortcuts tab in Settings. Matching finds the trigger anywhere in the final
+transcript at token boundaries using shared Unicode
+case/punctuation/whitespace normalization; it is exact rather than fuzzy.
+Longer phrase matches win over shorter matches at the same position.
+
+Enabled triggers are included in the live ASR context, while replacements stay
+in Swift and are never sent to the sidecar. The final HUD text and both output
+paths use the expanded replacement. Shortcut data is stored as JSON in the
+versioned `voiceShortcuts.v1` UserDefaults key.
+
+New files:
+
+- `WhisprStream/Sources/WhisprStream/VoiceShortcut.swift` — model, normalizer,
+  and validation.
+- `WhisprStream/Sources/WhisprStream/TranscriptExpander.swift` — deterministic
+  final-transcript expansion.
+- `WhisprStream/Sources/WhisprStream/VoiceShortcutsView.swift` — settings list
+  and add/edit sheet.
+- `WhisprStream/Tests/WhisprStreamTests/TranscriptExpanderTests.swift` and
+  `VoiceShortcutSettingsTests.swift` — domain and persistence/context tests.
+
+The SwiftPM test target runs with `swift test`; real-voice recognition QA on
+both supported models remains a manual follow-up.
+
 On-device dictation for macOS that handles **Chinese and English mixed in one
 sentence**. Built on an M1 Max / 32 GB, macOS 26.5, Swift 6.2.
 

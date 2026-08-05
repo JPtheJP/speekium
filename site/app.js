@@ -6,6 +6,11 @@ const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
    ============================================================ */
 const onHide = [];
 const root = document.documentElement;
+const nav = document.querySelector('nav');
+
+const syncNavSurface = () => nav?.classList.toggle('scrolled', window.scrollY > 24);
+syncNavSurface();
+addEventListener('scroll', syncNavSurface, { passive: true });
 
 // Also true when the page is opened straight into a background tab. rAF and
 // IntersectionObserver are both throttled there, so nothing below may rely
@@ -210,18 +215,108 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
    ============================================================ */
 (() => {
   const LINES = [
-    '这个 presentation 我 actually 还没开始写。',
-    'Envoie-moi le draft avant le standup, please.',
-    '帮我 book 一个 meeting，明天下午三点。',
-    'それ、もう deploy した？'
+    '帮我 review 一下这个 PR。',
+    'この feature、今日中に ship\u00a0できる？',
+    '이 버그 fix하고 바로\u00a0deploy할게요.',
+    'कल client के साथ एक important meeting\u00a0है।',
+    'ช่วย review ไฟล์นี้ก่อน meeting\u00a0ได้ไหม?',
+    'இந்த PR-ஐ இன்று review\u00a0பண்ணலாம்.',
+    'Write the release notes and send them to the\u00a0team.',
+    '¿Puedes revisar el PR antes del\u00a0almuerzo?'
   ];
-  const CJK = 92, WORD = 116, PUNCT = 300, HOLD = 900, DONE = 1500, GAP = 460;
+  const SCENES = [
+    { kind:'code', title:'Workspace', state:'Local agent', label:'Prompt', placeholder:'Describe the change…' },
+    { kind:'chat', title:'Product team', state:'6 members', label:'You', placeholder:'Say a message…' },
+    { kind:'terminal', title:'Local session', state:'zsh', label:'Prompt', placeholder:'Describe what to run…' },
+    { kind:'note', title:'Untitled', state:'Writing', label:'Quick note', placeholder:'Start speaking…' },
+    { kind:'chat', title:'Project room', state:'4 members', label:'You', placeholder:'Say a message…' },
+    { kind:'code', title:'Workspace', state:'Local agent', label:'Prompt', placeholder:'Describe the change…' },
+    { kind:'note', title:'Untitled', state:'Writing', label:'Quick note', placeholder:'Start speaking…' },
+    { kind:'code', title:'Workspace', state:'Local agent', label:'Prompt', placeholder:'Describe the change…' }
+  ];
+  const CJK = 44, WORD = 62, PUNCT = 110, HOLD = 500, DONE = 1700, GAP = 950;
 
   const hud = document.getElementById('hud');
   const line = document.getElementById('line');
   const inner = document.getElementById('inner');
   const caret = document.getElementById('caret');
-  if (!hud || !line || !inner || !caret) return;
+  const insertText = document.getElementById('insertText');
+  const insertLine = insertText?.closest('.insert-line');
+  const macWindow = document.getElementById('macWindow');
+  const sceneTitle = document.getElementById('sceneTitle');
+  const sceneState = document.getElementById('sceneState');
+  const insertLabel = document.getElementById('insertLabel');
+  if (!hud || !line || !inner || !caret || !macWindow || !sceneTitle || !sceneState || !insertLabel) return;
+
+  let insertSwap = 0, insertDone = 0, pendingInsert = '';
+  let sceneTimer = 0, pendingScene = null, sceneInitialized = false;
+
+  function settleInsert(text) {
+    if (!insertText || !insertLine) return;
+    clearTimeout(insertSwap);
+    clearTimeout(insertDone);
+    insertText.textContent = text;
+    insertText.classList.remove('placeholder', 'fresh');
+    insertLine.classList.remove('changing', 'inserting');
+  }
+
+  function insert(text) {
+    if (!insertText || !insertLine) return;
+    pendingInsert = text;
+    clearTimeout(insertSwap);
+    clearTimeout(insertDone);
+
+    if (REDUCED || document.hidden) { settleInsert(text); return; }
+
+    // Hide the old line before its width changes, reveal the new sentence as
+    // one continuous pass, then return the document cursor at the new end.
+    insertLine.classList.remove('inserting');
+    insertLine.classList.add('changing');
+    insertSwap = setTimeout(() => {
+      settleInsert(text);
+      void insertText.offsetWidth;
+      insertText.classList.add('fresh');
+      insertLine.classList.add('inserting');
+      insertDone = setTimeout(() => insertLine.classList.remove('inserting'), 380);
+    }, 90);
+  }
+
+  function applyScene(scene) {
+    macWindow.dataset.scene = scene.kind;
+    sceneTitle.textContent = scene.title;
+    sceneState.textContent = scene.state;
+    insertLabel.textContent = scene.label;
+    pendingInsert = scene.placeholder;
+    settleInsert(scene.placeholder);
+    insertText.classList.add('placeholder');
+  }
+
+  function changeScene(index, immediate = false) {
+    const scene = SCENES[index % SCENES.length];
+    clearTimeout(sceneTimer);
+    pendingScene = scene;
+
+    if (immediate || REDUCED || document.hidden) {
+      applyScene(scene);
+      macWindow.classList.remove('switching');
+      pendingScene = null;
+      return;
+    }
+
+    macWindow.classList.add('switching');
+    sceneTimer = setTimeout(() => {
+      applyScene(scene);
+      pendingScene = null;
+      requestAnimationFrame(() => requestAnimationFrame(() => macWindow.classList.remove('switching')));
+    }, 220);
+  }
+
+  onHide.push(() => { if (pendingInsert) settleInsert(pendingInsert); });
+  onHide.push(() => {
+    if (pendingScene) applyScene(pendingScene);
+    pendingScene = null;
+    macWindow.classList.remove('switching');
+  });
 
   // Latin arrives as whole words, CJK a character at a time — which is how the
   // model actually emits them, and far smoother than a uniform typewriter.
@@ -231,7 +326,7 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
   const cost = t => {
     const w = t.trim();
     if (/^[，。、,.!?！？]$/.test(w)) return PUNCT;
-    if (/^[A-Za-z0-9]/.test(w)) return WORD + Math.min(w.length, 9) * 9;
+    if (/^[A-Za-z0-9]/.test(w)) return WORD + Math.min(w.length, 9) * 4;
     return CJK;
   };
 
@@ -266,6 +361,10 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
 
   function next() {
     li = (li + 1) % LINES.length;
+    if (!sceneInitialized) {
+      changeScene(li, true);
+      sceneInitialized = true;
+    }
     build(LINES[li]);
     hud.dataset.phase = 'live';
     // Snap the caret home rather than let it glide back across the capsule.
@@ -277,10 +376,13 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
   }
 
   function showStatic() {
+    changeScene(0, true);
+    sceneInitialized = true;
     build(LINES[0]);
     toks.forEach(s => s.classList.add('shown'));
     line.style.width = (ends[ends.length - 1] + 3) + 'px';
     hud.dataset.phase = 'done';
+    insert(LINES[0]);
     // Drop the schedule build() just made, or a resuming loop would replay it
     // from the middle instead of starting a fresh line.
     events = []; span = 0;
@@ -307,8 +409,12 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
 
       while (at < events.length && clock >= events[at].t) {
         const e = events[at++];
-        if (e.commit) hud.dataset.phase = 'done';        // the final full pass
-        else if (e.clear) { toks.forEach(s => s.classList.remove('shown')); line.style.width = '0px'; }
+        if (e.commit) { hud.dataset.phase = 'done'; insert(LINES[li]); } // final pass, then type at the cursor
+        else if (e.clear) {
+          toks.forEach(s => s.classList.remove('shown'));
+          line.style.width = '0px';
+          changeScene((li + 1) % LINES.length);
+        }
         else reveal(e.i);
       }
       if (clock >= span) next();
@@ -317,7 +423,64 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
 })();
 
 /* ============================================================
-   6. FOOTER — several threads braid past each other, then damp into
+   6. VOICE SHORTCUTS — a short spoken trigger expands into saved text.
+   ============================================================ */
+(() => {
+  const demo = document.getElementById('shortcutDemo');
+  const trigger = document.getElementById('shortcutTrigger');
+  const result = document.getElementById('shortcutResult');
+  const state = document.getElementById('shortcutState');
+  if (!demo || !trigger || !result || !state) return;
+
+  const ITEMS = [
+    ['shortcut github', 'https://github.com/yourname'],
+    ['shortcut signature', 'Maya Chen · Product Designer'],
+    ['shortcut email', 'Thanks — I’ll review this and get back to you shortly.'],
+  ];
+
+  let index = 0, live = false, resolveTimer = 0, nextTimer = 0;
+
+  function clear() {
+    clearTimeout(resolveTimer);
+    clearTimeout(nextTimer);
+  }
+
+  function resolved() {
+    demo.dataset.phase = 'resolve';
+    state.textContent = 'Expanded';
+  }
+
+  function cycle() {
+    clear();
+    const [spoken, replacement] = ITEMS[index];
+    trigger.textContent = spoken;
+    result.textContent = replacement;
+    state.textContent = 'Listening';
+    demo.dataset.phase = '';
+    void demo.offsetWidth;
+    demo.dataset.phase = 'listen';
+
+    if (REDUCED || document.hidden) { resolved(); return; }
+    resolveTimer = setTimeout(resolved, 1550);
+    nextTimer = setTimeout(() => {
+      index = (index + 1) % ITEMS.length;
+      cycle();
+    }, 4100);
+  }
+
+  new IntersectionObserver(es => {
+    live = es[0].isIntersecting;
+    if (live) cycle(); else clear();
+  }, { threshold: .2 }).observe(demo);
+
+  onHide.push(() => { clear(); resolved(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && live && !REDUCED) cycle();
+  });
+})();
+
+/* ============================================================
+   7. FOOTER — several threads braid past each other, then damp into
       one single line. However many voices go in, one sentence
       comes out. Change THREADS and the figure redraws itself.
    ============================================================ */

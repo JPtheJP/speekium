@@ -19,12 +19,15 @@ struct SettingsView: View {
             SoundTab(settings: settings)
                 .tabItem { Label("Sound", systemImage: "speaker.wave.2") }
 
+            VoiceShortcutsView(settings: settings)
+                .tabItem { Label("Shortcuts", systemImage: "text.badge.plus") }
+
             PermissionsTab()
                 .tabItem { Label("Permissions", systemImage: "lock.shield") }
         }
-        // Wide enough for four tab labels. Below ~560 the tab bar silently
+        // Wide enough for five tab labels. Below ~650 the tab bar silently
         // collapses into an overflow popup, which hides the tabs entirely.
-        .frame(width: 580, height: 460)
+        .frame(width: 680, height: 520)
     }
 }
 
@@ -65,6 +68,13 @@ private struct GeneralTab: View {
                 Toggle(isOn: $settings.copyToClipboard) {
                     Text("Copy to clipboard")
                     Text("Keep the finished transcript on the clipboard.")
+                }
+
+                Toggle(isOn: $settings.usePunctuation) {
+                    Text("Use punctuation")
+                    Text(settings.usePunctuation
+                         ? "Keep sentence-ending punctuation from dictation."
+                         : "End each dictation with a space instead.")
                 }
             }
 

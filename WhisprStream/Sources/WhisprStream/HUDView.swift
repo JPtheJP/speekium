@@ -7,6 +7,8 @@ import SwiftUI
 /// watch the transcript settle as you speak.
 struct HUDView: View {
     @ObservedObject var state: AppState
+    let onDragChanged: () -> Void
+    let onDragEnded: () -> Void
 
     // Waveform geometry. The frame is derived from these so the bars can never
     // outgrow their slot and collide with the text.
@@ -49,7 +51,16 @@ struct HUDView: View {
                 .fill(.ultraThinMaterial)
                 .overlay {
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+                        .fill(Color.orange.opacity(state.isApproachingDictationLimit ? 0.18 : 0))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(
+                            state.isApproachingDictationLimit
+                                ? Color.orange.opacity(0.72)
+                                : Color.primary.opacity(0.07),
+                            lineWidth: state.isApproachingDictationLimit ? 1.2 : 0.5
+                        )
                 }
         }
         // Flatten before shadowing: a shadow applied straight to a material
@@ -59,6 +70,15 @@ struct HUDView: View {
         .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
         .shadow(color: .black.opacity(0.16), radius: 14, y: 7)
         .fixedSize()
+        // Gesture belongs to the visible capsule, before the outer shadow
+        // padding and fixed canvas are applied. This avoids turning the large
+        // transparent animation canvas into a drag handle.
+        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { _ in onDragChanged() }
+                .onEnded { _ in onDragEnded() }
+        )
         .padding(Self.shadowInset)
         // Centred in the fixed-size panel canvas, so growth animates from the
         // middle outward instead of snapping the window.
@@ -67,6 +87,7 @@ struct HUDView: View {
         // phase. Separate modifiers per field fight each other mid-resize.
         .animation(.spring(response: 0.30, dampingFraction: 0.85), value: state.displayText)
         .animation(.spring(response: 0.26, dampingFraction: 0.72), value: state.phase)
+        .animation(.easeInOut(duration: 0.2), value: state.isApproachingDictationLimit)
         .onAppear { history = Array(repeating: 0, count: barCount) }
         .onChange(of: state.level) { _, new in
             var next = history
@@ -78,8 +99,24 @@ struct HUDView: View {
 
     // MARK: - Right hand side
 
-    @ViewBuilder
     private var label: some View {
+        HStack(spacing: 10) {
+            labelText
+
+            if state.isApproachingDictationLimit {
+                Text(state.dictationCountdownLabel)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.orange)
+                    .frame(minWidth: 26, alignment: .trailing)
+                    .transition(.opacity)
+                    .accessibilityLabel("\(state.dictationCountdownLabel) remaining")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var labelText: some View {
         if !state.displayText.isEmpty {
             transcript
                 .transition(.opacity)

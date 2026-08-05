@@ -133,10 +133,19 @@ nav{
   position:fixed;inset:0 0 auto 0;z-index:50;
   display:flex;align-items:center;justify-content:space-between;
   padding:22px var(--gut);
-  mix-blend-mode:difference;color:#fff;
-  opacity:0;transition:opacity 1.2s var(--out) .3s;
+  color:#0a0a0a;background:rgba(255,255,255,0);
+  border-bottom:1px solid transparent;
+  opacity:0;
+  transition:opacity 1.2s var(--out) .3s,background-color .45s var(--soft),border-color .45s var(--soft),box-shadow .45s var(--soft);
 }
 html.ready nav{opacity:1}
+nav.scrolled{
+  background:rgba(255,255,255,.8);
+  -webkit-backdrop-filter:blur(18px) saturate(1.15);
+  backdrop-filter:blur(18px) saturate(1.15);
+  border-bottom-color:rgba(10,10,10,.075);
+  box-shadow:0 10px 30px rgba(10,10,10,.045);
+}
 nav .mark{font-size:14.5px;letter-spacing:-.02em}
 nav .links{display:flex;align-items:center;gap:26px;font-family:var(--serif);font-size:14.5px;letter-spacing:-.01em}
 nav a{text-decoration:none;opacity:.6;transition:opacity .5s var(--soft)}
@@ -160,7 +169,7 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 /* Smaller than the section headings elsewhere — the hero has to carry a
    two-line headline plus a call to action above the fold. */
 .hero .display{font-size:clamp(26px,4vw,46px);max-width:44ch;line-height:1.28}
-.hero .lede{margin-top:30px;max-width:38ch}
+.hero .lede{margin-top:30px;max-width:51ch}
 
 /* Rolling code-switched examples — hidden for now, not removed. app.js still
    populates and cycles it; this just keeps it out of layout and view. */
@@ -178,6 +187,131 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
   animation:cue 2.8s var(--soft) infinite;
 }
 @keyframes cue{0%{transform:translateX(-100%)}55%,100%{transform:translateX(100%)}}
+
+/* The demo puts the app's HUD over a familiar Mac writing surface, then
+   mirrors the finished transcript into the document. */
+.dictation-demo{
+  display:flex;flex-direction:column;align-items:center;
+  margin-top:clamp(54px,8vh,88px);
+}
+.mac-window{
+  --scene-bg:#fff;--scene-ink:#0a0a0a;--scene-mute:#8e8e8e;
+  position:relative;
+  width:min(760px,100%);height:clamp(210px,28vw,286px);
+  border:1px solid var(--hair);border-radius:16px;
+  background:var(--scene-bg);color:var(--scene-ink);overflow:hidden;
+  box-shadow:0 20px 70px rgba(10,10,10,.08);
+  transition:background .6s var(--soft),color .6s var(--soft);
+}
+.mac-window[data-scene="terminal"],.mac-window[data-scene="code"]{
+  --scene-bg:#fbfbfb;--scene-ink:#111;--scene-mute:#8a8a8a;
+}
+.mac-titlebar{
+  position:relative;z-index:10;
+  height:45px;padding:0 17px;border-bottom:1px solid var(--hair-soft);
+  display:grid;grid-template-columns:1fr auto 1fr;align-items:center;
+  background:var(--scene-bg);font-size:12.5px;color:var(--scene-mute);
+  transition:background .6s var(--soft),color .6s var(--soft);
+}
+.window-controls{display:flex;gap:7px}
+.window-controls i{display:block;width:10px;height:10px;border-radius:50%;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.18)}
+.window-controls i:nth-child(1){background:#ff5f57}
+.window-controls i:nth-child(2){background:#febc2e}
+.window-controls i:nth-child(3){background:#28c840}
+.window-state{text-align:right;font-size:12px}
+#sceneTitle,#sceneState{transition:opacity .32s var(--soft),transform .48s var(--out)}
+.mac-window[data-scene="terminal"] .mac-titlebar,.mac-window[data-scene="code"] .mac-titlebar{border-bottom-color:#e8e8e8}
+.scene-stack{position:absolute;z-index:1;inset:45px 0 0;overflow:hidden}
+.app-scene{
+  position:absolute;inset:0;opacity:0;transform:scale(.992);
+  transition:opacity .55s var(--soft),transform .65s var(--out);
+}
+.mac-window[data-scene="note"] .scene-note,
+.mac-window[data-scene="terminal"] .scene-terminal,
+.mac-window[data-scene="chat"] .scene-chat,
+.mac-window[data-scene="code"] .scene-code{opacity:1;transform:none}
+.mac-window.switching .app-scene{opacity:0;transform:scale(.992)}
+
+/* Generic writing app: a notes list beside an open page. */
+.scene-note{display:grid;grid-template-columns:26% 1fr;background:#fff}
+.note-sidebar{padding:20px 16px;background:#f6f6f4;border-right:1px solid rgba(10,10,10,.07)}
+.note-sidebar b{display:block;width:48%;height:9px;margin-bottom:18px;border-radius:5px;background:#b8b8b3}
+.note-sidebar i{display:block;width:100%;height:34px;margin-bottom:9px;border-radius:8px;background:#e4e4e1}
+.note-sidebar i:nth-of-type(2){background:#ececea}
+.note-paper{padding:28px 34px}
+
+/* Generic command-line workspace. */
+.scene-terminal{padding:24px 30px;background:#fbfbfb;color:#333;font:12px/1.8 var(--mono)}
+.scene-terminal p{margin:0}.scene-terminal b{color:#111;font-weight:400}.terminal-dim{color:#999}
+
+/* Generic team chat: channel rail and a thread, without copied branding. */
+.scene-chat{display:grid;grid-template-columns:27% 1fr;background:#fafafa}
+.chat-sidebar{padding:22px 18px;background:#f0f0f0;border-right:1px solid #e2e2e2}
+.chat-sidebar b,.chat-sidebar i{display:block;height:7px;margin-bottom:14px;border-radius:4px;background:#d0d0d0}
+.chat-sidebar b{width:54%;height:9px;background:#aaa}
+.chat-sidebar i:nth-of-type(1){width:76%}.chat-sidebar i:nth-of-type(2){width:61%}.chat-sidebar i:nth-of-type(3){width:82%}.chat-sidebar i:nth-of-type(4){width:67%}
+.chat-thread{padding:22px 30px}
+.chat-thread > div{display:grid;grid-template-columns:24px 1fr;gap:11px;margin-bottom:22px}
+.chat-thread b{width:24px;height:24px;border-radius:7px;background:#d1d1d1}
+.chat-thread p{margin:2px 0 0}.chat-thread i{display:block;width:74%;height:7px;margin-bottom:7px;border-radius:4px;background:#dedede}
+.chat-thread i:nth-child(2){width:46%}
+
+/* Generic local coding-agent workspace. */
+.scene-code{display:grid;grid-template-columns:25% 1fr;background:#fbfbfb;color:#777;font-family:var(--mono)}
+.code-sidebar{padding:20px 16px;border-right:1px solid #e4e4e4;background:#f2f2f2}
+.code-sidebar small{display:block;margin-bottom:16px;font-size:9px;letter-spacing:.12em;color:#999}
+.code-sidebar i{display:block;width:78%;height:6px;margin-bottom:11px;border-radius:3px;background:#d6d6d6}
+.code-sidebar i:nth-of-type(2){width:58%}.code-sidebar i:nth-of-type(3){width:69%}.code-sidebar i:nth-of-type(4){width:48%}
+.code-editor{padding:23px 30px}
+.code-editor i{display:block;width:62%;height:6px;margin-bottom:12px;border-radius:3px;background:#dedede}
+.code-editor i:nth-child(2){width:83%}.code-editor i:nth-child(3){width:54%}.code-editor i:nth-child(4){width:72%}.code-editor i:nth-child(5){width:44%}
+
+.insert-stage{
+  position:absolute;z-index:5;top:88px;left:31%;right:42px;
+  color:var(--scene-ink);
+  transition:opacity .3s var(--soft),transform .6s var(--out),top .6s var(--out),left .6s var(--out),right .6s var(--out),background .6s var(--soft),color .6s var(--soft);
+}
+.mac-window.switching .insert-stage,.mac-window.switching #sceneTitle,.mac-window.switching #sceneState{opacity:0;transform:translateY(3px)}
+.mac-window[data-scene="terminal"] .insert-stage{top:115px;left:30px;right:30px;font-family:var(--mono)}
+.mac-window[data-scene="chat"] .insert-stage{top:130px;left:34%;right:34px;padding:12px 15px;border:1px solid #e4e4e4;border-radius:11px;background:#fff;color:#111;box-shadow:0 7px 22px rgba(10,10,10,.06)}
+.mac-window[data-scene="code"] .insert-stage{top:143px;left:31%;right:32px;padding:11px 14px;border:1px solid #dedede;border-radius:9px;background:#fff;font-family:var(--mono);box-shadow:0 6px 18px rgba(10,10,10,.05)}
+.doc-label{
+  font-family:var(--mono);font-size:10px;line-height:1;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--scene-mute);
+}
+.insert-line{
+  margin-top:20px;width:100%;max-width:none;text-wrap:pretty;
+  font-size:clamp(16px,2vw,22px);line-height:1.65;
+  transition:opacity .09s var(--soft);
+}
+.mac-window[data-scene="terminal"] .insert-line,.mac-window[data-scene="code"] .insert-line{margin-top:9px;font-size:14px;line-height:1.55}
+.mac-window[data-scene="chat"] .insert-line{margin-top:7px;font-size:14px;line-height:1.5}
+.insert-line span{display:inline-block}
+.insert-line .placeholder{color:var(--scene-mute)}
+.insert-line.changing{opacity:0}
+.insert-line .fresh{animation:insert .38s var(--out) both}
+@keyframes insert{
+  from{opacity:.35;clip-path:inset(0 100% 0 0)}
+  to{opacity:1;clip-path:inset(0 0 0 0)}
+}
+.insert-caret{
+  display:inline-block;width:1px;height:1.05em;margin-left:2px;
+  background:currentColor;vertical-align:-.14em;animation:blink 1.15s steps(1) infinite;
+  transition:opacity .1s var(--soft);
+}
+.insert-line.changing .insert-caret,.insert-line.inserting .insert-caret{opacity:0;animation:none}
+.dictation-demo .hud{position:relative;z-index:2;margin-top:clamp(18px,3vw,28px)}
+.dictation-steps{
+  margin-top:30px;display:flex;align-items:center;justify-content:center;
+  gap:16px;flex-wrap:wrap;color:var(--mute);font-size:13.5px;
+}
+.dictation-steps span{display:inline-flex;align-items:center;gap:8px}
+.dictation-steps > i{display:block;width:28px;height:1px;background:var(--hair)}
+.dictation-steps kbd{
+  padding:5px 8px;border:1px solid var(--hair);border-radius:6px;
+  background:var(--paper);color:var(--ink);font:12px/1 var(--mono);
+  box-shadow:0 1px 0 var(--hair);
+}
 
 /* ============================================================
    HUD — the app's own capsule. Lives in the hero now, so every
@@ -233,7 +367,7 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
    revealed. Growth glides instead of stepping once per character. */
 .hud .line{
   position:relative;overflow:hidden;white-space:nowrap;
-  width:0;transition:width .55s var(--out);
+  width:0;transition:width .2s var(--out);
   font-size:clamp(15px,1.5vw,19px);line-height:1.5;text-align:left;
 }
 .hud .inner{display:inline-block;white-space:nowrap}
@@ -243,14 +377,14 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
    hard cut-off N characters back. */
 .hud .tok{
   opacity:0;color:var(--dim);
-  transition:opacity .3s var(--soft),color .5s var(--soft) .42s;
+  transition:opacity .12s var(--soft),color .22s var(--soft) .12s;
 }
 .hud .tok.shown{opacity:1;color:var(--ink)}
 
 .hud .caret{
   position:absolute;left:0;top:50%;width:1px;height:.95em;background:var(--ink);
   transform:translate3d(0,-50%,0);
-  transition:transform .34s var(--out),opacity .25s var(--soft);
+  transition:transform .15s var(--out),opacity .12s var(--soft);
   animation:blink 1.15s steps(1) infinite;
 }
 @keyframes blink{0%,55%{opacity:1}56%,100%{opacity:0}}
@@ -273,6 +407,91 @@ nav .gh{width:16px;height:16px;vertical-align:-1px}
 .cell .glyph svg{width:auto;height:100%;display:block;overflow:visible}
 .cell h3{font-size:21px;letter-spacing:-.02em;line-height:1.3;margin-bottom:12px;font-weight:400}
 .cell p{font-size:14.5px;color:var(--mute);line-height:1.7;max-width:27ch}
+
+/* ============================================================
+   VOICE SHORTCUTS — spoken trigger becomes reusable text
+   ============================================================ */
+.feature-split,.model-layout{
+  display:grid;grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr);
+  gap:clamp(54px,8vw,112px);align-items:center;
+}
+.feature-copy{margin-top:26px;max-width:42ch;font-size:16.5px;line-height:1.8;color:var(--mute)}
+.shortcut-section{padding-top:clamp(84px,12vh,150px)}
+.shortcut-demo{
+  padding:24px 26px 22px;border:1px solid var(--hair);border-radius:18px;
+  background:var(--paper);box-shadow:0 18px 60px rgba(10,10,10,.07);
+}
+.shortcut-topline{
+  display:flex;justify-content:space-between;gap:20px;padding-bottom:18px;
+  border-bottom:1px solid var(--hair-soft);font:11px/1 var(--mono);
+  letter-spacing:.08em;text-transform:uppercase;color:var(--mute);
+}
+.shortcut-state{color:var(--ink);letter-spacing:0;text-transform:none}
+.shortcut-row{display:grid;grid-template-columns:82px 1fr;gap:18px;align-items:center}
+.heard-row{padding:25px 0 20px}
+.shortcut-label{font:11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.shortcut-heard{display:flex;align-items:center;gap:14px;min-width:0}
+.shortcut-heard q{font-size:clamp(16px,2vw,20px);quotes:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shortcut-heard q::before,.shortcut-heard q::after{content:""}
+.shortcut-meter{display:flex;align-items:center;gap:2px;width:23px;height:20px;flex:0 0 auto}
+.shortcut-meter i{display:block;width:2px;height:18px;border-radius:2px;background:var(--ink);transform:scaleY(.18)}
+.shortcut-meter i:nth-child(2),.shortcut-meter i:nth-child(4){height:13px}
+.shortcut-meter i:nth-child(3){height:20px}
+.shortcut-demo[data-phase="listen"] .shortcut-meter i{animation:shortcut-wave .72s var(--soft) infinite alternate}
+.shortcut-demo[data-phase="listen"] .shortcut-meter i:nth-child(2){animation-delay:-.38s}
+.shortcut-demo[data-phase="listen"] .shortcut-meter i:nth-child(3){animation-delay:-.18s}
+.shortcut-demo[data-phase="listen"] .shortcut-meter i:nth-child(4){animation-delay:-.52s}
+.shortcut-demo[data-phase="listen"] .shortcut-meter i:nth-child(5){animation-delay:-.28s}
+@keyframes shortcut-wave{to{transform:scaleY(1)}}
+.shortcut-path{position:relative;height:18px;margin-left:99px}
+.shortcut-path i{position:absolute;left:0;top:50%;width:100%;height:1px;background:var(--hair)}
+.shortcut-path b{
+  position:absolute;left:0;top:50%;width:100%;height:1px;background:var(--ink);
+  transform:scaleX(0);transform-origin:left;transition:transform .7s var(--out);
+}
+.shortcut-demo[data-phase="resolve"] .shortcut-path b{transform:scaleX(1)}
+.result-row{padding:20px 0 18px}
+.result-row p{
+  margin:0;font:14px/1.6 var(--mono);overflow-wrap:anywhere;
+  transition:opacity .25s var(--soft);opacity:.18;
+}
+.shortcut-demo[data-phase="resolve"] .result-row p{opacity:1;animation:shortcut-result .68s var(--out)}
+@keyframes shortcut-result{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+.shortcut-foot{padding-top:16px;border-top:1px solid var(--hair-soft);font-size:12.5px;color:var(--mute)}
+
+/* ============================================================
+   MODEL FLEXIBILITY — full-utterance passes settle into a stream
+   ============================================================ */
+.model-section{padding-top:clamp(72px,10vh,130px)}
+.model-layout{margin-top:clamp(58px,8vh,92px);grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.model-demo{padding:24px;border:1px solid var(--hair);border-radius:18px;background:var(--paper)}
+.model-source{
+  display:flex;justify-content:space-between;gap:20px;align-items:baseline;
+  padding-bottom:19px;border-bottom:1px solid var(--hair-soft);font-size:14px;
+}
+.model-source small{font:11px/1 var(--mono);color:var(--mute)}
+.model-passes{padding:23px 0;display:flex;flex-direction:column;gap:16px}
+.model-passes div{display:grid;grid-template-columns:62px 1fr;gap:14px;align-items:center}
+.model-passes b{font:10px/1 var(--mono);font-weight:400;color:var(--mute)}
+.model-passes div::after{content:"";height:1px;background:var(--hair);grid-column:2;grid-row:1}
+.model-passes i{
+  position:relative;z-index:1;display:block;grid-column:2;grid-row:1;
+  width:var(--w);height:2px;border-radius:2px;background:var(--ink);
+  transform:scaleX(0);transform-origin:left;transition:transform 1s var(--out);
+}
+.in .model-passes i{transform:scaleX(1)}
+.model-passes div:nth-child(2) i{transition-delay:.18s}.model-passes div:nth-child(3) i{transition-delay:.36s}
+.model-stream{
+  display:flex;align-items:center;justify-content:space-between;gap:18px;
+  padding:18px 19px;border-radius:11px;background:var(--ink);color:var(--paper);
+  font-size:13.5px;
+}
+.model-stream i{position:relative;width:54px;height:1px;background:rgba(255,255,255,.28);overflow:hidden}
+.model-stream i::after{
+  content:"";position:absolute;inset:0;background:#fff;transform:translateX(-100%);
+  animation:model-stream 2.2s var(--soft) infinite;
+}
+@keyframes model-stream{60%,100%{transform:translateX(100%)}}
 
 /* ============================================================
    THE IDEA — chunked vs whole
@@ -470,7 +689,7 @@ footer a:hover{color:var(--ink)}
    RESPONSIVE
    ============================================================ */
 @media (max-width:860px){
-  .cols,.cols.cols-4,.figures,.idea{grid-template-columns:1fr;gap:56px}
+  .cols,.cols.cols-4,.figures,.idea,.feature-split,.model-layout{grid-template-columns:1fr;gap:56px}
   .hero .display{max-width:none}
   .hud{gap:14px;padding:16px 20px}
   nav .links a:first-child{display:none}
@@ -479,4 +698,13 @@ footer a:hover{color:var(--ink)}
   /* No room to keep a sentence on one line — let the capsule grow instead
      of clipping the half the reader most wants to see. */
   .hud .line{white-space:normal;overflow:visible;font-size:14.5px;line-height:1.45}
+  .mac-window{height:220px}
+  .insert-stage{top:74px;left:31%;right:20px}
+  .mac-window[data-scene="terminal"] .insert-stage{top:88px;left:22px;right:22px}
+  .mac-window[data-scene="chat"] .insert-stage{top:96px;left:32%;right:18px;padding:9px 11px}
+  .mac-window[data-scene="code"] .insert-stage{top:103px;left:30%;right:18px;padding:9px 11px}
+  .insert-line{font-size:15px}
+  .note-paper,.chat-thread,.code-editor{padding-left:18px;padding-right:18px}
+  .dictation-steps{gap:11px 13px}
+  .dictation-steps > i{width:18px}
 }

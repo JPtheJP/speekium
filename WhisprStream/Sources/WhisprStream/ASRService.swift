@@ -83,13 +83,26 @@ final class ASRService {
                     tail: obj["tail"] as? String ?? ""
                 )
             case "final":
+                let seconds = obj["secs"] as? Double ?? 0
+                let inferenceMS = obj["ms"] as? Int ?? 0
+                let totalMS = obj["total_ms"] as? Int ?? inferenceMS
+                let waitMS = obj["wait_ms"] as? Int ?? 0
+                let mode = obj["mode"] as? String ?? "legacy"
+                let unseenMS = obj["unseen_ms"] as? Int ?? 0
+                Log.write(
+                    "asr final: audio=\(String(format: "%.2f", seconds))s "
+                    + "visible=\(totalMS)ms wait=\(waitMS)ms inference=\(inferenceMS)ms "
+                    + "mode=\(mode) unseen=\(unseenMS)ms"
+                )
                 event = .final(
                     text: obj["text"] as? String ?? "",
-                    secs: obj["secs"] as? Double ?? 0,
-                    ms: obj["ms"] as? Int ?? 0
+                    secs: seconds,
+                    ms: inferenceMS
                 )
             default:
-                event = .error(obj["message"] as? String ?? "unknown")
+                let message = obj["message"] as? String ?? "unknown"
+                Log.write("asr error: \(message)")
+                event = .error(message)
             }
             DispatchQueue.main.async { self.onEvent?(event) }
         }

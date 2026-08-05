@@ -60,7 +60,7 @@ enum TextInserter {
 
         pb.clearContents()
         let ok = pb.setString(text, forType: .string)
-        Log.write("  pasteboard write=\(ok) readback=\((pb.string(forType: .string) ?? "").prefix(20))")
+        Log.write("  pasteboard write=\(ok) chars=\(text.count)")
         let insertedChangeCount = pb.changeCount
 
         // The pasteboard write is asynchronous from the front app's point of

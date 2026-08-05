@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WhisprStream — speech to text, talk like you actually talk</title>
-<meta name="description" content="On-device dictation for macOS. Mix as many languages as you like in the same sentence. Built for vibe coders. Open source, MIT.">
+<title>WhisprStream — instant, teachable dictation for your Mac</title>
+<meta name="description" content="Faster, more accurate on-device Mac dictation. Teach it your vocabulary, switch languages mid-sentence, or use a compatible fine-tuned model.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
@@ -26,12 +26,12 @@
 <!-- ============ HERO ============ -->
 <section class="hero reveal">
   <div class="wrap">
-    <p class="eyebrow rise" style="--i:0">Open source · macOS</p>
+    <p class="eyebrow rise" style="--i:0">Instant Mac dictation · Open source</p>
     <h1 class="display rise" style="--i:1;margin-top:28px">
-      Open speech to text. Instantly yours.
+      Speak. Your Mac types — instantly.
       <span class="roll" id="roll" aria-label="Sentences that mix two languages at once."></span>
     </h1>
-    <p class="lede rise" style="--i:2">For people who mix languages mid-sentence without thinking about it — and for vibe coders who'd rather talk to the agent than type at it.</p>
+    <p class="lede rise" style="--i:2">Faster and more accurate than built-in dictation — in any app. Teach it your vocabulary or use a compatible fine-tuned model.</p>
 
     <div class="cta rise" style="--i:3">
       <a class="btn" href="#">
@@ -44,23 +44,51 @@
       </a>
     </div>
 
-    <button class="cmd rise" style="--i:4" type="button" data-copy="brew install whisprstream">
-      <i>$</i>
-      <code>brew install whisprstream</code>
-      <span class="copy" aria-hidden="true">
-        <svg class="ic-copy" viewBox="0 0 16 16"><rect x="5.6" y="5.6" width="9" height="9" rx="2.2"/><path d="M10.9 3.6a2 2 0 0 0-2-2H3.6a2 2 0 0 0-2 2v5.3a2 2 0 0 0 2 2"/></svg>
-        <svg class="ic-done" viewBox="0 0 16 16"><path d="M3 8.4 6.4 11.8 13 4.6"/></svg>
-      </span>
-      <span class="sr">Copy install command</span>
-    </button>
-
-    <p class="fineprint rise" style="--i:5">Free, MIT licensed · macOS 14 or later, Apple silicon</p>
+    <p class="fineprint rise" style="--i:4">Free, MIT licensed · macOS 14 or later · Apple silicon</p>
   </div>
 
-  <!-- The app itself: same capsule, same settle animation. Concrete beats
-       abstract for "what does this thing do" — this replaced a braid
-       animation that looked good but didn't show the product. -->
-  <div class="wrap" style="display:flex;justify-content:center">
+  <!-- The product in context: WhisprStream floats over whatever Mac app owns
+       the cursor, then inserts the finished sentence into that app. -->
+  <div class="wrap dictation-demo">
+    <div class="mac-window rise" id="macWindow" data-scene="code" style="--i:5" aria-label="WhisprStream dictating into different kinds of Mac apps">
+      <div class="mac-titlebar">
+        <span class="window-controls" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span id="sceneTitle">Workspace</span>
+        <span class="window-state" id="sceneState">Local agent</span>
+      </div>
+
+      <div class="scene-stack" aria-hidden="true">
+        <div class="app-scene scene-note">
+          <aside class="note-sidebar"><b></b><i></i><i></i></aside>
+          <main class="note-paper"></main>
+        </div>
+
+        <div class="app-scene scene-terminal">
+          <p><b>~</b> local-agent</p>
+          <p class="terminal-dim">Ready. Describe what you want to do.</p>
+          <p><b>›</b></p>
+        </div>
+
+        <div class="app-scene scene-chat">
+          <aside class="chat-sidebar"><b></b><i></i><i></i><i></i><i></i></aside>
+          <main class="chat-thread">
+            <div><b></b><p><i></i><i></i></p></div>
+            <div><b></b><p><i></i></p></div>
+          </main>
+        </div>
+
+        <div class="app-scene scene-code">
+          <aside class="code-sidebar"><small>PROJECT</small><i></i><i></i><i></i><i></i></aside>
+          <main class="code-editor"><i></i><i></i><i></i><i></i><i></i></main>
+        </div>
+      </div>
+
+      <div class="insert-stage">
+        <p class="doc-label" id="insertLabel">Prompt</p>
+        <p class="insert-line"><span class="placeholder" id="insertText">Describe the change…</span><i class="insert-caret" aria-hidden="true"></i></p>
+      </div>
+    </div>
+
     <div class="hud" id="hud" data-phase="live">
       <div class="slot">
         <div class="meter" id="meter"></div>
@@ -68,11 +96,13 @@
       </div>
       <div class="line" id="line"><span class="inner" id="inner"></span><i class="caret" id="caret"></i></div>
     </div>
-  </div>
-  <div class="wrap">
-    <div class="legend rise" style="--i:6">
-      <span><em></em> Settled</span>
-      <span class="dim"><em></em> Still deciding</span>
+
+    <div class="dictation-steps rise" style="--i:6" aria-label="How WhisprStream dictation works">
+      <span><kbd>Right ⌥</kbd> Hold anywhere</span>
+      <i aria-hidden="true"></i>
+      <span>Speak naturally</span>
+      <i aria-hidden="true"></i>
+      <span>Text lands at the cursor</span>
     </div>
   </div>
 
@@ -117,8 +147,8 @@
             <line x1="55" y1="55" x2="79" y2="66"/>
           </svg>
         </div>
-        <h3>It never makes you wait.</h3>
-        <p>Twelve seconds of speech, under one second of waiting.</p>
+        <h3>It feels instant.</h3>
+        <p>Twelve seconds of speech, transcribed in under one second.</p>
       </div>
 
       <div class="cell rise" style="--i:4">
@@ -128,10 +158,41 @@
             <circle cx="28" cy="55" r="6"/>
           </svg>
         </div>
-        <h3>It never forgets a name you teach it.</h3>
-        <p>Add a name, a term, any jargon the model's never seen — it gets it right from then on.</p>
+        <h3>Teach it once.</h3>
+        <p>Add a name, term, or jargon once. It remembers from then on.</p>
       </div>
 
+    </div>
+  </div>
+</section>
+
+<!-- ============ VOICE SHORTCUTS ============ -->
+<section class="reveal shortcut-section" id="shortcuts">
+  <div class="wrap feature-split">
+    <div>
+      <p class="eyebrow rise" style="--i:0">Voice shortcuts</p>
+      <h2 class="h2 rise" style="--i:1;margin-top:24px">Say a phrase.<br>Insert anything.</h2>
+      <p class="feature-copy rise" style="--i:2">Turn a short spoken trigger into a URL, signature, address, reusable reply, or any text you type often. Shortcuts stay on your Mac and work wherever the cursor is.</p>
+    </div>
+
+    <div class="shortcut-demo rise" id="shortcutDemo" data-phase="listen" style="--i:2" aria-label="Animated voice shortcut example">
+      <div class="shortcut-topline">
+        <span>Voice shortcut</span>
+        <span class="shortcut-state" id="shortcutState">Listening</span>
+      </div>
+      <div class="shortcut-row heard-row">
+        <span class="shortcut-label">You say</span>
+        <div class="shortcut-heard">
+          <span class="shortcut-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <q id="shortcutTrigger">shortcut github</q>
+        </div>
+      </div>
+      <div class="shortcut-path" aria-hidden="true"><i></i><b></b></div>
+      <div class="shortcut-row result-row">
+        <span class="shortcut-label">Mac types</span>
+        <p id="shortcutResult">https://github.com/yourname</p>
+      </div>
+      <p class="shortcut-foot">Saved locally · available in every text field</p>
     </div>
   </div>
 </section>
@@ -165,6 +226,36 @@
         <div class="track">
           <div class="solo"><u></u></div>
           <div class="sweep"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MODEL FLEXIBILITY ============ -->
+<section class="reveal model-section">
+  <div class="wrap">
+    <div class="rule" style="--i:0"></div>
+    <div class="model-layout">
+      <div>
+        <p class="eyebrow rise" style="--i:1">Bring the right model</p>
+        <h2 class="h2 rise" style="--i:2;margin-top:24px">Streaming is a behavior, not a model requirement.</h2>
+        <p class="feature-copy rise" style="--i:3">Use another supported transcription model or a compatible fine-tuned checkpoint. Even when the model only returns a finished transcript, WhisprStream repeatedly re-reads the growing utterance and settles the stable words into a live stream.</p>
+      </div>
+
+      <div class="model-demo rise" style="--i:2" aria-label="A non-streaming transcription model producing a continuous live preview">
+        <div class="model-source">
+          <span>Compatible ASR checkpoint</span>
+          <small>Base · fine-tuned</small>
+        </div>
+        <div class="model-passes">
+          <div><b>Pass 01</b><i style="--w:34%"></i></div>
+          <div><b>Pass 02</b><i style="--w:61%"></i></div>
+          <div><b>Pass 03</b><i style="--w:86%"></i></div>
+        </div>
+        <div class="model-stream">
+          <span>One continuous dictation stream</span>
+          <i aria-hidden="true"></i>
         </div>
       </div>
     </div>

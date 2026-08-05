@@ -9,6 +9,11 @@ let package = Package(
             name: "WhisprStream",
             path: "Sources/WhisprStream",
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "WhisprStreamTests",
+            dependencies: ["WhisprStream"],
+            path: "Tests/WhisprStreamTests"
         )
     ]
 )

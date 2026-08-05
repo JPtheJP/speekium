@@ -99,6 +99,13 @@ final class Settings: ObservableObject {
         didSet { defaults.set(copyToClipboard, forKey: Keys.copyToClipboard) }
     }
 
+    /// Keep sentence-ending punctuation from the speech model. When disabled,
+    /// finished dictations end with a space instead so the next dictation does
+    /// not run into the previous one.
+    @Published var usePunctuation: Bool {
+        didSet { defaults.set(usePunctuation, forKey: Keys.usePunctuation) }
+    }
+
     @Published var playSound: Bool {
         didSet { defaults.set(playSound, forKey: Keys.playSound) }
     }
@@ -174,13 +181,61 @@ final class Settings: ObservableObject {
     @Published private(set) var vocabularyEntries: [String] {
         didSet {
             defaults.set(vocabularyEntries, forKey: Keys.vocabularyEntries)
-            onContextChange?(vocabularyContext)
+            onContextChange?(asrContext)
         }
     }
 
-    /// Text sent to the ASR model's context prompt.
-    var vocabularyContext: String {
-        vocabularyEntries.joined(separator: "\n")
+    /// Vocabulary plus enabled Voice Shortcut triggers, sent to the resident
+    /// ASR sidecar as newline-separated soft recognition context.
+    var asrContext: String {
+        var lines: [String] = []
+        var seen = Set<String>()
+        for line in vocabularyEntries + voiceShortcuts.filter(\.isEnabled).map(\.trigger) {
+            guard seen.insert(line).inserted else { continue }
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    @Published private(set) var voiceShortcuts: [VoiceShortcut] {
+        didSet {
+            guard voiceShortcuts != oldValue else { return }
+            persistVoiceShortcuts()
+            onContextChange?(asrContext)
+        }
+    }
+
+    func addVoiceShortcut(_ shortcut: VoiceShortcut) throws {
+        try VoiceShortcutValidation.validate(shortcut, against: voiceShortcuts)
+        voiceShortcuts.append(shortcut)
+    }
+
+    func updateVoiceShortcut(_ shortcut: VoiceShortcut) throws {
+        try VoiceShortcutValidation.validate(
+            shortcut,
+            against: voiceShortcuts,
+            excluding: shortcut.id
+        )
+        guard let index = voiceShortcuts.firstIndex(where: { $0.id == shortcut.id }) else { return }
+        voiceShortcuts[index] = shortcut
+    }
+
+    func removeVoiceShortcut(id: UUID) {
+        voiceShortcuts.removeAll { $0.id == id }
+    }
+
+    func setVoiceShortcutEnabled(id: UUID, enabled: Bool) {
+        guard let index = voiceShortcuts.firstIndex(where: { $0.id == id }),
+              voiceShortcuts[index].isEnabled != enabled else { return }
+        voiceShortcuts[index].isEnabled = enabled
+    }
+
+    private func persistVoiceShortcuts() {
+        guard let data = try? JSONEncoder().encode(voiceShortcuts) else {
+            Log.write("voice shortcuts save failed")
+            return
+        }
+        defaults.set(data, forKey: Keys.voiceShortcuts)
     }
 
     /// Replaces the complete vocabulary after applying the same normalization
@@ -213,35 +268,40 @@ final class Settings: ObservableObject {
     /// Fired when a change requires the hotkey monitor to be rebound.
     var onChange: (() -> Void)?
 
-    /// Fired when the vocabulary changes, to push it to the live sidecar.
+    /// Fired when vocabulary or Voice Shortcuts change, to push the combined
+    /// context to the live sidecar.
     var onContextChange: ((String) -> Void)?
 
     /// Fired when the model changes, to restart the sidecar on the new weights.
     var onModelChange: ((ASRModel) -> Void)?
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
     private enum Keys {
         static let triggerKey = "triggerKey"
         static let activationMode = "activationMode"
         static let autoInsert = "autoInsert"
         static let copyToClipboard = "copyToClipboard"
+        static let usePunctuation = "usePunctuation"
         static let playSound = "playSound"
         static let insertSound = "insertSound"   // pre-pairs; read once to migrate
         static let soundTheme = "soundTheme"
         static let contextTerms = "contextTerms"
         static let vocabularyEntries = "vocabularyEntries"
+        static let voiceShortcuts = "voiceShortcuts.v1"
         static let model = "model"
         static let onboarded = "hasCompletedOnboarding"
     }
 
-    private init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         triggerKey = TriggerKey(rawValue: defaults.string(forKey: Keys.triggerKey) ?? "")
             ?? .rightOption
         activationMode = ActivationMode(rawValue: defaults.string(forKey: Keys.activationMode) ?? "")
             ?? .hold
         autoInsert = defaults.object(forKey: Keys.autoInsert) as? Bool ?? true
         copyToClipboard = defaults.object(forKey: Keys.copyToClipboard) as? Bool ?? true
+        usePunctuation = defaults.object(forKey: Keys.usePunctuation) as? Bool ?? true
         playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? false
         // Migration: before pairs, the choice lived in `insertSound` as a bare
         // alert-sound name. Carry it over so an existing setting is preserved
@@ -261,6 +321,16 @@ final class Settings: ObservableObject {
             let migrated = VocabularyEntry.normalizedUnique(entries)
             defaults.set(migrated, forKey: Keys.vocabularyEntries)
             vocabularyEntries = migrated
+        }
+        if let data = defaults.data(forKey: Keys.voiceShortcuts) {
+            do {
+                voiceShortcuts = try JSONDecoder().decode([VoiceShortcut].self, from: data)
+            } catch {
+                Log.write("voice shortcuts load failed; starting empty")
+                voiceShortcuts = []
+            }
+        } else {
+            voiceShortcuts = []
         }
         model = ASRModel(rawValue: defaults.string(forKey: Keys.model) ?? "") ?? .small
         hasCompletedOnboarding = defaults.bool(forKey: Keys.onboarded)

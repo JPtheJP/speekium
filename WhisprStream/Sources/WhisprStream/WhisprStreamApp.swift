@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = HUDPanel(state: state)
+        state.onDictationLimitReached = { [weak self] in self?.endDictation() }
         setUpStatusItem()
 
         let trusted = AXIsProcessTrusted()
@@ -106,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             script: script,
             model: env["WHISPR_MODEL"] ?? settings.model.rawValue,
             bits: Int(env["WHISPR_BITS"] ?? "8") ?? 8,
-            context: settings.vocabularyContext
+            context: settings.asrContext
         )
     }
 
@@ -122,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the Settings window instead.
         if state.phase == .listening {
             capture.stop()
+            state.stopDictationTimer()
             state.level = 0
             dismissNow()
         }
@@ -201,11 +203,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dismissWork?.cancel()
         state.reset()
         state.phase = .listening
+        state.startDictationTimer()
         panel.present()
 
         settings.playStart()
         asr.beginUtterance()
         do { try capture.start() } catch {
+            state.stopDictationTimer()
             state.phase = .failed("Microphone unavailable")
             scheduleDismiss(after: 1.6)
         }
@@ -214,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func endDictation() {
         guard state.phase == .listening else { return }
         capture.stop()
+        state.stopDictationTimer()
         state.level = 0
         state.phase = .thinking
         asr.stopUtterance()
@@ -238,12 +243,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 dismissNow()
                 return
             }
-            state.committed = text
+            let normalizedText = SpokenSymbolNormalizer.normalize(
+                SpokenNumberNormalizer.normalize(text)
+            )
+            let formattedText = TranscriptFormatter.format(
+                normalizedText,
+                usePunctuation: settings.usePunctuation
+            )
+            let expansion = TranscriptExpander.expand(formattedText, using: settings.voiceShortcuts)
+            if let matchedID = expansion.matchedShortcutID {
+                Log.write("voice shortcut matched id=\(matchedID) inputChars=\(normalizedText.count) outputChars=\(expansion.text.count)")
+            }
+            let deliveredText = settings.usePunctuation
+                ? expansion.text
+                : (expansion.text.last?.isWhitespace == true ? expansion.text : expansion.text + " ")
+            state.committed = deliveredText
             state.tail = ""
             state.phase = .inserted
 
             TextInserter.deliver(
-                text,
+                deliveredText,
                 insertAtCursor: settings.autoInsert,
                 copyToClipboard: settings.copyToClipboard
             )
@@ -251,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleDismiss(after: 0.42)
 
         case let .error(message):
+            state.stopDictationTimer()
             state.phase = .failed(message)
             scheduleDismiss(after: 1.8)
         }
