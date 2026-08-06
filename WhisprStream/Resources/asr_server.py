@@ -11,10 +11,10 @@ Speaks newline-delimited JSON on stdin/stdout so Swift can drive it:
          {"type":"final","text":"...","secs":2.6,"ms":140}
          {"type":"error","message":"..."}
 
-Inference strategy is the one we measured: never chunk. Re-decode the whole
-utterance every pass (RTF ~0.024 at 8-bit) so every pass has full context and
-zh/en code-switching survives. LocalAgreement-2 marks a prefix stable once two
-consecutive passes agree.
+Final passes re-decode the complete utterance (RTF ~0.024 at 8-bit), preserving
+zh/en code-switching. Long live previews use a bounded recent window so they do
+not compete with another full-length pass. LocalAgreement-2 marks a preview
+prefix stable once two consecutive passes agree.
 """
 
 from __future__ import annotations
@@ -41,10 +41,28 @@ MAX_BUFFER_SEC = 50.0
 # short, confidently silent tail. These thresholds are deliberately
 # conservative: ordinary room noise passes, while even quiet speech or a sharp
 # transient falls back to the authoritative final decode.
-MAX_SILENT_REUSE_TAIL = 0.75
+# Adaptive preview pacing deliberately creates idle decoder windows once an
+# utterance grows beyond five seconds. A stable preview may remain reusable
+# across that idle time, but only when every unseen frame is confidently
+# silent. Speech-like audio always takes the authoritative final-decode path.
+MAX_SILENT_REUSE_TAIL = 2.0
 SILENCE_WINDOW_SEC = 0.02
 SILENCE_MAX_WINDOW_RMS = 0.02
 SILENCE_MAX_PEAK = 0.06
+
+PREVIEW_FULL_SPEED_SEC = 4.0
+PREVIEW_ADAPTIVE_RAMP_SEC = 4.0
+PREVIEW_COOLDOWN_DECODE_RATIO = 2.0
+PREVIEW_MAX_COOLDOWN_SEC = 1.5
+
+# Re-decoding a full 45-second buffer for every HUD update makes both the live
+# text and the later final pass compete with multi-second preview work. Once an
+# utterance exceeds this size, previews use only the recent window. The final
+# decode still receives the complete buffer, so inserted text and code-switching
+# accuracy are unchanged.
+PREVIEW_MAX_AUDIO_SEC = 12.0
+WINDOWED_PREVIEW_COOLDOWN_RATIO = 0.75
+WINDOWED_PREVIEW_MAX_COOLDOWN_SEC = 0.4
 
 
 def emit(obj: dict) -> None:
@@ -76,6 +94,45 @@ def is_confident_silence(audio: np.ndarray) -> bool:
     return True
 
 
+def preview_cooldown(
+    audio_seconds: float,
+    decode_seconds: float,
+    *,
+    windowed: bool = False,
+) -> float:
+    """Return an idle interval that keeps medium/long final decoding responsive.
+
+    Short utterances retain the original live-preview cadence. From four
+    seconds onward the idle interval ramps toward twice the duration of the
+    previous preview pass, targeting roughly a 33% decoder duty cycle by eight
+    seconds. This gives a stop command a useful chance to arrive while the
+    model is idle, without changing the audio or authoritative final transcript.
+    """
+    if audio_seconds <= PREVIEW_FULL_SPEED_SEC or decode_seconds <= 0:
+        return POLL_INTERVAL
+
+    if windowed:
+        adaptive = decode_seconds * WINDOWED_PREVIEW_COOLDOWN_RATIO
+        return max(
+            POLL_INTERVAL,
+            min(WINDOWED_PREVIEW_MAX_COOLDOWN_SEC, adaptive),
+        )
+
+    progress = min(
+        1.0,
+        (audio_seconds - PREVIEW_FULL_SPEED_SEC) / PREVIEW_ADAPTIVE_RAMP_SEC,
+    )
+    adaptive = decode_seconds * PREVIEW_COOLDOWN_DECODE_RATIO * progress
+    return max(POLL_INTERVAL, min(PREVIEW_MAX_COOLDOWN_SEC, adaptive))
+
+
+def preview_audio(full_audio: np.ndarray) -> tuple[np.ndarray, int]:
+    """Return the bounded HUD preview audio and its full-buffer start index."""
+    preview_cap = int(PREVIEW_MAX_AUDIO_SEC * SAMPLE_RATE)
+    preview_start = max(0, len(full_audio) - preview_cap)
+    return full_audio[preview_start:], preview_start
+
+
 class Server:
     def __init__(self, model_id: str, bits: int, context: str):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -93,9 +150,11 @@ class Server:
         self._prev = ""
         self._last_preview_text: str | None = None
         self._last_preview_len = 0
+        self._last_preview_start = 0
         self._last_preview_context_revision = -1
         self._last_preview_stable = False
         self._thread: threading.Thread | None = None
+        self._preview_stop = threading.Event()
 
     # -- transcription -------------------------------------------------
     def _decode(self, audio: np.ndarray, context: str) -> str:
@@ -111,10 +170,15 @@ class Server:
         with self.lock:
             text = self._last_preview_text
             decoded_len = self._last_preview_len
+            decoded_start = self._last_preview_start
             decoded_revision = self._last_preview_context_revision
             stable = self._last_preview_stable
 
         if text is None or decoded_revision != context_revision:
+            return None
+        # A rolling-window preview intentionally contains only the recent HUD
+        # text. It can never stand in for the full authoritative transcript.
+        if decoded_start != 0:
             return None
         if decoded_len > len(audio):
             return None
@@ -166,24 +230,36 @@ class Server:
         last_len = 0
         while self.active:
             with self.lock:
-                audio = self.buf.copy()
+                full_audio = self.buf.copy()
                 context = self.context
                 context_revision = self._context_revision
-            grew = len(audio) - last_len >= int(MIN_NEW_AUDIO * SAMPLE_RATE)
-            if len(audio) < int(MIN_SECONDS * SAMPLE_RATE) or not grew:
+            full_len = len(full_audio)
+            grew = full_len - last_len >= int(MIN_NEW_AUDIO * SAMPLE_RATE)
+            if full_len < int(MIN_SECONDS * SAMPLE_RATE) or not grew:
                 time.sleep(POLL_INTERVAL)
                 continue
-            last_len = len(audio)
+            last_len = full_len
+            audio, preview_start = preview_audio(full_audio)
             try:
+                decode_started = time.perf_counter()
                 text = self._decode(audio, context)
+                decode_seconds = time.perf_counter() - decode_started
                 stable = text == self._prev
                 agreed = commonprefix(text, self._prev)
-                if len(agreed) > len(self.committed):
+                if preview_start == 0:
+                    if len(agreed) > len(self.committed):
+                        self.committed = agreed
+                else:
+                    # The rolling window moves forward, so its settled prefix
+                    # may legitimately shrink. The HUD already truncates from
+                    # the head and therefore naturally presents this recent
+                    # full-context window as the visible tail of the utterance.
                     self.committed = agreed
                 self._prev = text
                 with self.lock:
                     self._last_preview_text = text
-                    self._last_preview_len = len(audio)
+                    self._last_preview_len = full_len
+                    self._last_preview_start = preview_start
                     self._last_preview_context_revision = context_revision
                     self._last_preview_stable = stable
                 if self.active:
@@ -195,7 +271,18 @@ class Server:
             except Exception as e:
                 if self.active:
                     emit({"type": "error", "message": f"partial: {e}"})
-            time.sleep(POLL_INTERVAL)
+                decode_seconds = 0.0
+
+            cooldown = preview_cooldown(
+                full_len / SAMPLE_RATE,
+                decode_seconds,
+                windowed=preview_start > 0,
+            )
+            # Unlike time.sleep(), Event.wait() lets stop() wake an idle
+            # preview thread immediately instead of adding up to one second to
+            # release latency at the long-utterance cap.
+            if self._preview_stop.wait(timeout=cooldown):
+                break
 
     # -- commands ------------------------------------------------------
     def start(self) -> None:
@@ -205,15 +292,18 @@ class Server:
         # once cleanup finishes, every queued audio packet is still consumed.
         if self._thread is not None and self._thread.is_alive():
             self.active = False
+            self._preview_stop.set()
             self._join_preview_thread(timeout=None)
         with self.lock:
             self.buf = np.zeros(0, dtype=np.float32)
             self._last_preview_text = None
             self._last_preview_len = 0
+            self._last_preview_start = 0
             self._last_preview_context_revision = -1
             self._last_preview_stable = False
         self.committed = ""
         self._prev = ""
+        self._preview_stop.clear()
         self.active = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -241,6 +331,7 @@ class Server:
     def stop(self) -> None:
         stop_started = time.perf_counter()
         self.active = False
+        self._preview_stop.set()
 
         with self.lock:
             audio = self.buf.copy()

@@ -41,6 +41,9 @@ class Result:
     latency_ms: float
     text: str
     mode: str
+    partial_count: int
+    mean_partial_gap_ms: float
+    max_partial_gap_ms: float
 
 
 class EventCapture:
@@ -133,10 +136,23 @@ def run_once(
     else:
         server.stop()
     emitted, event = capture.final()
+    with capture.lock:
+        partial_times = [
+            timestamp
+            for timestamp, item in capture.events
+            if item.get("type") == "partial"
+        ]
+    partial_gaps = [
+        (current - previous) * 1000
+        for previous, current in zip(partial_times, partial_times[1:])
+    ]
     return Result(
         latency_ms=(emitted - released) * 1000,
         text=event.get("text", ""),
         mode=event.get("mode", "unknown"),
+        partial_count=len(partial_times),
+        mean_partial_gap_ms=mean(partial_gaps) if partial_gaps else 0.0,
+        max_partial_gap_ms=max(partial_gaps, default=0.0),
     )
 
 
@@ -183,7 +199,10 @@ def main() -> int:
                     results[algorithm].append(result)
                     print(
                         f"  trial {trial + 1} {algorithm:9s}: "
-                        f"{result.latency_ms:7.1f} ms  {result.mode}",
+                        f"{result.latency_ms:7.1f} ms  {result.mode}  "
+                        f"partials={result.partial_count} "
+                        f"gap_mean={result.mean_partial_gap_ms:.0f}ms "
+                        f"gap_max={result.max_partial_gap_ms:.0f}ms",
                         flush=True,
                     )
 

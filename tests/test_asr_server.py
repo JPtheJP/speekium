@@ -32,12 +32,63 @@ class SilenceDetectionTests(unittest.TestCase):
         self.assertFalse(asr_server.is_confident_silence(audio))
 
 
+class PreviewSchedulingTests(unittest.TestCase):
+    def test_short_utterances_keep_original_cadence(self):
+        self.assertEqual(
+            asr_server.preview_cooldown(4.0, 0.4),
+            asr_server.POLL_INTERVAL,
+        )
+
+    def test_medium_utterances_ramp_toward_idle_decoder(self):
+        self.assertAlmostEqual(
+            asr_server.preview_cooldown(6.0, 0.45),
+            0.45,
+        )
+
+    def test_eight_second_utterances_target_one_third_decoder_duty(self):
+        self.assertAlmostEqual(
+            asr_server.preview_cooldown(8.0, 0.45),
+            0.9,
+        )
+
+    def test_cooldown_is_capped(self):
+        self.assertEqual(
+            asr_server.preview_cooldown(45.0, 4.0),
+            asr_server.PREVIEW_MAX_COOLDOWN_SEC,
+        )
+
+    def test_windowed_preview_uses_faster_hud_cadence(self):
+        cooldown = asr_server.preview_cooldown(45.0, 0.5, windowed=True)
+        self.assertAlmostEqual(cooldown, 0.375)
+
+    def test_windowed_preview_cooldown_is_capped(self):
+        self.assertEqual(
+            asr_server.preview_cooldown(45.0, 2.0, windowed=True),
+            asr_server.WINDOWED_PREVIEW_MAX_COOLDOWN_SEC,
+        )
+
+    def test_short_preview_keeps_complete_audio(self):
+        audio = np.arange(8 * asr_server.SAMPLE_RATE, dtype=np.float32)
+        preview, start = asr_server.preview_audio(audio)
+        self.assertEqual(start, 0)
+        np.testing.assert_array_equal(preview, audio)
+
+    def test_long_preview_keeps_only_recent_window(self):
+        audio = np.arange(45 * asr_server.SAMPLE_RATE, dtype=np.float32)
+        preview, start = asr_server.preview_audio(audio)
+        expected_len = int(asr_server.PREVIEW_MAX_AUDIO_SEC * asr_server.SAMPLE_RATE)
+        self.assertEqual(len(preview), expected_len)
+        self.assertEqual(start, len(audio) - expected_len)
+        np.testing.assert_array_equal(preview, audio[-expected_len:])
+
+
 class PreviewReuseTests(unittest.TestCase):
     def make_server(self, text="hello", decoded_len=3200, revision=2, stable=True):
         server = asr_server.Server.__new__(asr_server.Server)
         server.lock = threading.Lock()
         server._last_preview_text = text
         server._last_preview_len = decoded_len
+        server._last_preview_start = 0
         server._last_preview_context_revision = revision
         server._last_preview_stable = stable
         return server
@@ -55,6 +106,21 @@ class PreviewReuseTests(unittest.TestCase):
             ("hello", "reuse-silent-tail", 800),
         )
 
+    def test_stable_preview_remains_reusable_across_adaptive_cooldown(self):
+        server = self.make_server(decoded_len=3200)
+        tail = int(1.8 * asr_server.SAMPLE_RATE)
+        audio = np.zeros(3200 + tail, dtype=np.float32)
+        self.assertEqual(
+            server._reusable_preview(audio, 2),
+            ("hello", "reuse-silent-tail", tail),
+        )
+
+    def test_silent_tail_beyond_adaptive_headroom_falls_back(self):
+        server = self.make_server(decoded_len=3200)
+        tail = int(2.1 * asr_server.SAMPLE_RATE)
+        audio = np.zeros(3200 + tail, dtype=np.float32)
+        self.assertIsNone(server._reusable_preview(audio, 2))
+
     def test_unstable_preview_with_silent_tail_falls_back(self):
         server = self.make_server(stable=False)
         audio = np.zeros(4000, dtype=np.float32)
@@ -64,6 +130,12 @@ class PreviewReuseTests(unittest.TestCase):
         server = self.make_server()
         audio = np.zeros(3200, dtype=np.float32)
         self.assertIsNone(server._reusable_preview(audio, 3))
+
+    def test_rolling_window_preview_is_never_reused_as_full_final(self):
+        server = self.make_server(decoded_len=3200)
+        server._last_preview_start = 800
+        audio = np.zeros(3200, dtype=np.float32)
+        self.assertIsNone(server._reusable_preview(audio, 2))
 
     def test_voiced_tail_falls_back(self):
         server = self.make_server()
