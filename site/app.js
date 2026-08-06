@@ -304,11 +304,13 @@ document.querySelectorAll('.cmd[data-copy]').forEach(el => {
     }
 
     macWindow.classList.add('switching');
+    // The outgoing scene reaches opacity 0 before the data-scene selector
+    // changes, so the two app surfaces can never cross-fade over each other.
     sceneTimer = setTimeout(() => {
       applyScene(scene);
       pendingScene = null;
       requestAnimationFrame(() => requestAnimationFrame(() => macWindow.classList.remove('switching')));
-    }, 220);
+    }, 280);
   }
 
   onHide.push(() => { if (pendingInsert) settleInsert(pendingInsert); });
