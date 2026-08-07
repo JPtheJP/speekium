@@ -59,6 +59,23 @@ enum ModelInstallState: Equatable {
 /// its first shard missing. A model counts as installed only when every weight
 /// file its index references is on disk.
 enum ModelCatalog {
+    /// Shared with RuntimeManager's local first-run simulator. This state is
+    /// process-only: developer testing never hides, deletes, or creates a real
+    /// Hugging Face cache entry.
+    static var isDeveloperTestMode: Bool {
+        ProcessInfo.processInfo.environment["WHISPR_TEST_FIRST_RUN"] == "1"
+    }
+    private static var simulatedInstalledModels = Set<ASRModel>()
+
+    static func markDeveloperTestInstalled(_ model: ASRModel) {
+        guard isDeveloperTestMode else { return }
+        simulatedInstalledModels.insert(model)
+    }
+
+    static func resetDeveloperTestModels() {
+        simulatedInstalledModels.removeAll()
+    }
+
     /// Honours the same environment variables `huggingface_hub` does, so a user
     /// with a relocated cache isn't told their models are missing.
     static var cacheRoot: URL {
@@ -75,6 +92,9 @@ enum ModelCatalog {
     }
 
     static func state(for model: ASRModel) -> ModelInstallState {
+        if isDeveloperTestMode {
+            return simulatedInstalledModels.contains(model) ? .installed : .missing
+        }
         let fm = FileManager.default
         let repo = cacheRoot.appendingPathComponent(model.cacheFolderName)
         guard fm.fileExists(atPath: repo.path) else { return .missing }

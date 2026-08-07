@@ -14,7 +14,11 @@ final class AppWindows {
 
     // MARK: - Onboarding
 
-    func showOnboarding(settings appSettings: Settings, onFinish: @escaping () -> Void) {
+    func showOnboarding(
+        settings appSettings: Settings,
+        runtime: RuntimeManager,
+        onFinish: @escaping () -> Void
+    ) {
         if let onboarding {
             present(onboarding)
             return
@@ -27,7 +31,7 @@ final class AppWindows {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
 
-        let view = OnboardingView(settings: appSettings) { [weak self] in
+        let view = OnboardingView(settings: appSettings, runtime: runtime) { [weak self] in
             onFinish()
             self?.onboarding?.close()
             self?.onboarding = nil
@@ -40,13 +44,13 @@ final class AppWindows {
 
     // MARK: - Settings
 
-    func showSettings(_ appSettings: Settings) {
+    func showSettings(_ appSettings: Settings, runtime: RuntimeManager) {
         if let settings {
             present(settings)
             return
         }
         let window = makeWindow(title: "Settings", styleMask: [.titled, .closable])
-        let host = NSHostingView(rootView: SettingsView(settings: appSettings))
+        let host = NSHostingView(rootView: SettingsView(settings: appSettings, runtime: runtime))
         window.contentView = host
         // Let the tabbed form declare its own size rather than forcing one —
         // a hard-coded height is what clipped the last section before.

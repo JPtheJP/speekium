@@ -1,19 +1,40 @@
 #!/bin/bash
 # Build WhisprStream.app.
 #
-# The ASR runs as a Python sidecar, so the bundle records the interpreter to use.
-# Pass a different one with:  PYTHON=/path/to/python ./build.sh
+# The ASR runs as a Python sidecar. Local builds use a prepared venv; public
+# releases download a separately versioned runtime after first launch.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
 PYTHON="${PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 APP="${APP:-$PROJECT_ROOT/WhisprStream.app}"
+VERSION="${VERSION:-1.0.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
+RELEASE="${RELEASE:-0}"
+RUNTIME_URL="${RUNTIME_URL:-}"
+RUNTIME_SHA256="${RUNTIME_SHA256:-}"
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-dev.local.whisprstream}"
 
-if [ ! -x "$PYTHON" ]; then
-    echo "error: no python at $PYTHON" >&2
-    echo "       set PYTHON=/path/to/python and re-run" >&2
-    exit 1
+if [ "$RELEASE" = "1" ]; then
+    if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ]; then
+        echo "error: release builds require RUNTIME_URL and RUNTIME_SHA256" >&2
+        exit 1
+    fi
+    if ! [[ "$RUNTIME_URL" =~ ^https:// ]] || ! [[ "$RUNTIME_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+        echo "error: RUNTIME_URL must be HTTPS and RUNTIME_SHA256 must be a SHA-256 hash" >&2
+        exit 1
+    fi
+    DEVELOPMENT_PYTHON=""
+else
+    if [ ! -x "$PYTHON" ]; then
+        echo "error: no python at $PYTHON" >&2
+        echo "       set PYTHON=/path/to/python and re-run" >&2
+        exit 1
+    fi
+    # Local builds continue to use the prepared venv. RELEASE=1 deliberately
+    # clears this value so no developer-specific path is shipped to users.
+    DEVELOPMENT_PYTHON="$PYTHON"
 fi
 
 echo "▸ compiling"
@@ -47,16 +68,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key><string>WhisprStream</string>
     <key>CFBundleDisplayName</key><string>WhisprStream</string>
-    <key>CFBundleIdentifier</key><string>dev.local.whisprstream</string>
-    <key>CFBundleVersion</key><string>1.0</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleIdentifier</key><string>$BUNDLE_IDENTIFIER</string>
+    <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>WhisprStream</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>WhisprStream transcribes your speech on-device.</string>
-    <key>WhisprPythonPath</key><string>$PYTHON</string>
+    <key>WhisprDevelopmentPythonPath</key><string>$DEVELOPMENT_PYTHON</string>
+    <key>WhisprRuntimeURL</key><string>$RUNTIME_URL</string>
+    <key>WhisprRuntimeSHA256</key><string>$RUNTIME_SHA256</string>
 </dict>
 </plist>
 PLIST
@@ -85,6 +108,10 @@ fi
 codesign --force --deep --sign "$IDENTITY" "$APP"
 
 echo "✓ built $APP"
-echo "  python: $PYTHON"
+if [ "$RELEASE" = "1" ]; then
+    echo "  runtime: $RUNTIME_URL"
+else
+    echo "  python: $PYTHON"
+fi
 echo
 echo "  open $APP"

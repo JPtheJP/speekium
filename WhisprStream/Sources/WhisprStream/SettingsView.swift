@@ -1,33 +1,107 @@
 import SwiftUI
 
-/// Native macOS settings: a tabbed window of grouped forms.
+/// Native macOS settings with a permanently visible labeled sidebar.
 ///
-/// `Form` + `.formStyle(.grouped)` is what System Settings and modern Apple apps
-/// use — it gets the inset rounded sections, label column alignment, and control
-/// sizing for free, which a hand-rolled VStack of rows never quite matches.
+/// A native TabView collapses its labels into an icon-only strip when macOS
+/// decides space is tight. Settings contains six sections, so a fixed sidebar
+/// is clearer and does not turn navigation into an overflow control.
 struct SettingsView: View {
     @ObservedObject var settings: Settings
+    @ObservedObject var runtime: RuntimeManager
+    @State private var selectedSection: SettingsSection? = .general
 
     var body: some View {
-        TabView {
-            GeneralTab(settings: settings)
-                .tabItem { Label("General", systemImage: "gearshape") }
+        HStack(spacing: 0) {
+            List(SettingsSection.allCases, selection: $selectedSection) { section in
+                Label(section.title, systemImage: section.symbol)
+                    .tag(section)
+            }
+            .listStyle(.sidebar)
+            .frame(width: 160)
 
-            ModelTab(settings: settings)
-                .tabItem { Label("Model", systemImage: "waveform.badge.mic") }
+            Divider()
 
-            SoundTab(settings: settings)
-                .tabItem { Label("Sound", systemImage: "speaker.wave.2") }
-
-            VoiceShortcutsView(settings: settings)
-                .tabItem { Label("Shortcuts", systemImage: "text.badge.plus") }
-
-            PermissionsTab()
-                .tabItem { Label("Permissions", systemImage: "lock.shield") }
+            selectedContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        // Wide enough for five tab labels. Below ~650 the tab bar silently
-        // collapses into an overflow popup, which hides the tabs entirely.
-        .frame(width: 680, height: 520)
+        .frame(width: 760, height: 540)
+    }
+
+    @ViewBuilder
+    private var selectedContent: some View {
+        switch selectedSection ?? .general {
+        case .general: GeneralTab(settings: settings)
+        case .model: ModelTab(settings: settings)
+        case .sound: SoundTab(settings: settings)
+        case .shortcuts: VoiceShortcutsView(settings: settings)
+        case .permissions: PermissionsTab()
+        case .engine: RuntimeTab(runtime: runtime)
+        }
+    }
+}
+
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case general, model, sound, shortcuts, permissions, engine
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .model: "Model"
+        case .sound: "Sound"
+        case .shortcuts: "Shortcuts"
+        case .permissions: "Permissions"
+        case .engine: "Engine"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .general: "gearshape"
+        case .model: "waveform.badge.mic"
+        case .sound: "speaker.wave.2"
+        case .shortcuts: "text.badge.plus"
+        case .permissions: "lock.shield"
+        case .engine: "cpu"
+        }
+    }
+}
+
+private struct RuntimeTab: View {
+    @ObservedObject var runtime: RuntimeManager
+
+    var body: some View {
+        Form {
+            Section("Speech engine") {
+                LabeledContent("Status") {
+                    switch runtime.phase {
+                    case .ready:
+                        Label("Installed", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    case .missing: Text("Not installed")
+                    case .downloading: ProgressView()
+                    case .installing: ProgressView()
+                    case let .failed(message): Text(message).foregroundStyle(.red)
+                    }
+                }
+                if runtime.isReady {
+                    Text("The engine is stored in Application Support, separately from the app bundle. Models are downloaded only when you choose one.")
+                        .foregroundStyle(.secondary)
+                    if runtime.isDeveloperTestMode {
+                        Button("Reset simulated first run") { runtime.resetDeveloperTestInstall() }
+                        Text("This changes no real files. Quit and relaunch with the test flag to run onboarding again.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("Install speech engine") { runtime.install() }
+                    if let message = runtime.installMessage {
+                        Text(message).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

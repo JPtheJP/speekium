@@ -24,6 +24,7 @@ final class ModelDownloader: ObservableObject {
 
     private var process: Process?
     private var buffer = Data()
+    private var simulationTask: Task<Void, Never>?
 
     /// Called when a download finishes, so the UI can re-check install state.
     var onFinish: ((ASRModel, Bool) -> Void)?
@@ -31,16 +32,17 @@ final class ModelDownloader: ObservableObject {
     func start(_ model: ASRModel) {
         guard active == nil else { return }
 
+        if ModelCatalog.isDeveloperTestMode {
+            startDeveloperSimulation(model)
+            return
+        }
+
         guard let script = Bundle.main.url(forResource: "model_download", withExtension: "py") else {
             failure = "model_download.py missing from the app bundle"
             return
         }
-        let env = ProcessInfo.processInfo.environment
-        let pythonPath = env["WHISPR_PYTHON"]
-            ?? (Bundle.main.object(forInfoDictionaryKey: "WhisprPythonPath") as? String)
-            ?? "/usr/bin/python3"
-        guard FileManager.default.isExecutableFile(atPath: pythonPath) else {
-            failure = "No Python at \(pythonPath)"
+        guard let python = RuntimeManager.shared.executableURL else {
+            failure = "The speech engine is not installed"
             return
         }
 
@@ -51,9 +53,9 @@ final class ModelDownloader: ObservableObject {
         buffer = Data()
 
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: pythonPath)
+        proc.executableURL = python
         proc.arguments = [script.path, model.rawValue]
-        var childEnv = env
+        var childEnv = ProcessInfo.processInfo.environment
         childEnv["PYTHONUNBUFFERED"] = "1"
         proc.environment = childEnv
 
@@ -81,9 +83,36 @@ final class ModelDownloader: ObservableObject {
     }
 
     func cancel() {
+        simulationTask?.cancel()
+        simulationTask = nil
         process?.terminate()
         process = nil
         active = nil
+    }
+
+    private func startDeveloperSimulation(_ model: ASRModel) {
+        active = model
+        received = 0
+        total = 100
+        failure = nil
+        simulationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.simulationTask = nil }
+            do {
+                try await Task.sleep(nanoseconds: 500_000_000)
+                try Task.checkCancellation()
+                self.received = 62
+                try await Task.sleep(nanoseconds: 650_000_000)
+                try Task.checkCancellation()
+                ModelCatalog.markDeveloperTestInstalled(model)
+                self.received = self.total
+                self.finish(ok: true)
+            } catch is CancellationError {
+                // `cancel()` has already restored the idle state.
+            } catch {
+                self.finish(ok: false)
+            }
+        }
     }
 
     private func ingest(_ data: Data) {

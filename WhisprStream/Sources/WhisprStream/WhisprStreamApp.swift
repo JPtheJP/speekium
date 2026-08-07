@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let state = AppState()
     private let settings = Settings.shared
     private let windows = AppWindows()
+    private let runtime = RuntimeManager.shared
 
     private var panel: HUDPanel!
     private var statusItem: NSStatusItem!
@@ -39,6 +40,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.write("launch: accessibility=\(trusted ? "granted" : "DENIED") "
                   + "onboarded=\(settings.hasCompletedOnboarding)")
 
+        if runtime.isReady, ModelCatalog.state(for: settings.model).isInstalled {
+            startSpeechEngine()
+            if settings.hasCompletedOnboarding {
+                // Onboarding requests these itself; only prompt directly when skipped.
+                AVCaptureDevice.requestAccess(for: .audio) { _ in }
+                if !trusted { HotKeyMonitor.ensureAccessibility() }
+            } else {
+                windows.showOnboarding(settings: settings, runtime: runtime) { [weak self] in
+                    self?.settings.hasCompletedOnboarding = true
+                    self?.startSpeechEngine()
+                }
+            }
+        } else {
+            presentSetup()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        hotkey?.stop()
+        asr?.shutdown()
+    }
+
+    // MARK: - Wiring
+
+    private func presentSetup() {
+        windows.showOnboarding(settings: settings, runtime: runtime) { [weak self] in
+            guard let self else { return }
+            self.settings.hasCompletedOnboarding = true
+            self.startSpeechEngine()
+        }
+    }
+
+    private func startSpeechEngine() {
+        guard asr == nil else { return }
         do {
             asr = try makeService()
             asr.onEvent = { [weak self] in self?.handle($0) }
@@ -59,55 +94,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.hotkey.rebind(key: self.settings.triggerKey, mode: self.settings.activationMode)
             self.refreshStatusMenu()
         }
-
-        settings.onContextChange = { [weak self] terms in
-            self?.asr.setContext(terms)
-        }
-
-        settings.onModelChange = { [weak self] _ in
-            self?.reloadASR()
-        }
-
+        settings.onContextChange = { [weak self] terms in self?.asr?.setContext(terms) }
+        settings.onModelChange = { [weak self] _ in self?.reloadASR() }
         capture.onBuffer = { [weak self] pcm, level in
-            self?.asr.sendAudio(pcm)
+            self?.asr?.sendAudio(pcm)
             DispatchQueue.main.async {
                 guard let self else { return }
-                // Ease toward the new level so the waveform glides.
                 self.state.level = self.state.level * 0.55 + CGFloat(level) * 0.45
             }
         }
-
-        if settings.hasCompletedOnboarding {
-            // Onboarding requests these itself; only prompt directly when skipped.
-            AVCaptureDevice.requestAccess(for: .audio) { _ in }
-            if !trusted { HotKeyMonitor.ensureAccessibility() }
-        } else {
-            windows.showOnboarding(settings: settings) { [weak self] in
-                self?.settings.hasCompletedOnboarding = true
-            }
-        }
     }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        hotkey?.stop()
-        asr?.shutdown()
-    }
-
-    // MARK: - Wiring
 
     private func makeService() throws -> ASRService {
-        let env = ProcessInfo.processInfo.environment
         let root = Bundle.main.resourceURL ?? URL(fileURLWithPath: ".")
         let script = root.appendingPathComponent("asr_server.py")
 
-        let pythonPath = env["WHISPR_PYTHON"] ?? defaultPythonPath
-        guard FileManager.default.isExecutableFile(atPath: pythonPath) else {
-            Log.write("no python at \(pythonPath)")
+        let env = ProcessInfo.processInfo.environment
+        guard let python = runtime.executableURL else {
+            Log.write("no managed Python runtime")
             throw CocoaError(.fileNoSuchFile)
         }
 
         return ASRService(
-            python: URL(fileURLWithPath: pythonPath),
+            python: python,
             script: script,
             model: env["WHISPR_MODEL"] ?? settings.model.rawValue,
             bits: Int(env["WHISPR_BITS"] ?? "8") ?? 8,
@@ -146,10 +155,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleDismiss(after: 2.0)
         }
         refreshStatusMenu()
-    }
-
-    private var defaultPythonPath: String {
-        (Bundle.main.object(forInfoDictionaryKey: "WhisprPythonPath") as? String) ?? "/usr/bin/python3"
     }
 
     // MARK: - Menu bar
@@ -191,12 +196,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    @objc private func openSettings() { windows.showSettings(settings) }
+    @objc private func openSettings() { windows.showSettings(settings, runtime: runtime) }
     @objc private func openAbout() { windows.showAbout() }
 
     @objc private func openOnboarding() {
-        windows.showOnboarding(settings: settings) { [weak self] in
+        windows.showOnboarding(settings: settings, runtime: runtime) { [weak self] in
             self?.settings.hasCompletedOnboarding = true
+            self?.startSpeechEngine()
         }
     }
 
