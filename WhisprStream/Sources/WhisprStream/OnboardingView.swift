@@ -18,7 +18,9 @@ struct OnboardingView: View {
     @State private var createVoiceShortcut = false
     @State private var shortcutTrigger = ""
     @State private var shortcutReplacement = ""
+    @State private var didNotifyPrerequisitesReady = false
 
+    var onPrerequisitesReady: () -> Void
     var onFinish: () -> Void
 
     enum Step: Int, CaseIterable {
@@ -51,8 +53,40 @@ struct OnboardingView: View {
         }
         .frame(width: 580, height: 620)
         .background(.regularMaterial)
-        .onAppear { permissions.beginPolling() }
+        .onAppear {
+            permissions.beginPolling()
+            notifyWhenPrerequisitesAreReady()
+        }
         .onDisappear { permissions.endPolling() }
+        .onChange(of: runtime.isReady) { _, _ in notifyWhenPrerequisitesAreReady() }
+        .onChange(of: settings.model) { _, _ in notifyWhenPrerequisitesAreReady() }
+        .onChange(of: modelReloadToken) { _, _ in notifyWhenPrerequisitesAreReady() }
+        .alert(
+            "Clear partial model data?",
+            isPresented: Binding(
+                get: { modelDownloader.cleanupPrompt != nil },
+                set: { if !$0 { modelDownloader.dismissCleanupPrompt() } }
+            )
+        ) {
+            Button("Clear and Continue", role: .destructive) {
+                modelDownloader.removeIncompleteDownload()
+            }
+            Button("Keep It", role: .cancel) { modelDownloader.dismissCleanupPrompt() }
+        } message: {
+            Text("This unfinished data cannot be resumed. Clearing it frees space for a fresh download and does not affect installed models or settings.")
+        }
+        .alert(
+            "Replace speech engine?",
+            isPresented: Binding(
+                get: { runtime.requiresRepairConfirmation },
+                set: { if !$0 { runtime.cancelRepairConfirmation() } }
+            )
+        ) {
+            Button("Repair / Reinstall", role: .destructive) { runtime.confirmRepairInstall() }
+            Button("Cancel", role: .cancel) { runtime.cancelRepairConfirmation() }
+        } message: {
+            Text("This replaces the engine only. Your models, preferences, vocabulary, and shortcuts will stay on this Mac.")
+        }
     }
 
     private var slide: AnyTransition {
@@ -72,7 +106,7 @@ struct OnboardingView: View {
             VStack(spacing: 10) {
                 Text("WhisprStream")
                     .font(.system(size: 30, weight: .semibold, design: .rounded))
-                Text("Dictation that runs entirely on your Mac.\nMixes languages mid-sentence without losing either.")
+                Text("Requires macOS 14 or later and an Apple-silicon Mac.\nProcessing stays on your Mac.")
                     .font(.system(size: 14.5))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -105,18 +139,50 @@ struct OnboardingView: View {
             VStack(spacing: 14) {
                 switch runtime.phase {
                 case .ready:
-                    Label("Speech engine installed", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                    VStack(spacing: 8) {
+                        Label(
+                            runtime.isUsingDevelopmentEngine ? "Development engine ready" : "Speech engine ready",
+                            systemImage: "checkmark.circle.fill"
+                        )
+                            .foregroundStyle(.green)
+                        if runtime.canManageEngineInstallation && !runtime.isDeveloperTestMode {
+                            Button("Repair / Reinstall") { runtime.install() }
+                                .buttonStyle(.link)
+                                .font(.caption)
+                        }
+                    }
+                case .checking:
+                    ProgressView("Checking speech engine…")
+                case .checkingStorage:
+                    ProgressView("Checking storage…")
+                case let .insufficientStorage(required, available):
+                    VStack(spacing: 8) {
+                        Text("Not enough storage").font(.headline)
+                        Text("Need \(StorageCapacity.formatted(required)); \(StorageCapacity.formatted(available)) available.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button("Manage Storage…") { StorageCapacity.openStorageSettings() }
+                            Button("Try Again") { runtime.install() }
+                        }
+                    }
                 case .downloading:
                     ProgressView("Downloading speech engine…")
                     Button("Cancel") { runtime.cancelInstall() }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
+                case .verifying:
+                    ProgressView("Verifying speech engine…")
                 case .installing:
                     ProgressView("Installing speech engine…")
                 case .missing:
-                    Button("Download speech engine") { runtime.install() }
-                        .buttonStyle(PrimaryButtonStyle())
+                    if runtime.canManageEngineInstallation {
+                        Button("Download speech engine") { runtime.install() }
+                            .buttonStyle(PrimaryButtonStyle())
+                    }
+                    if let summary = runtime.storageSummary {
+                        Text(summary).font(.caption).foregroundStyle(.secondary)
+                    }
                     if let message = runtime.installMessage {
                         Text(message).font(.caption).foregroundStyle(.secondary)
                     }
@@ -126,6 +192,14 @@ struct OnboardingView: View {
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                     Button("Try Again") { runtime.install() }
+                case let .incompatible(message):
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                    if runtime.canManageEngineInstallation {
+                        Button("Repair / Reinstall") { runtime.install() }
+                    }
                 }
             }
         }
@@ -141,6 +215,17 @@ struct OnboardingView: View {
                 ForEach(ASRModel.allCases) { model in
                     onboardingModelRow(model)
                 }
+
+                if let preflight = modelDownloader.preflight,
+                   modelDownloader.active != nil {
+                    Text("Available: \(StorageCapacity.formatted(preflight.availableBytes)) · model files: \(StorageCapacity.formatted(preflight.totalBytes))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(ModelCatalog.hardwareGuidance)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
 
                 if let failure = modelDownloader.failure {
                     Text(failure)
@@ -174,14 +259,42 @@ struct OnboardingView: View {
                             .background(Color.accentColor.opacity(0.13), in: Capsule())
                     }
                 }
-                Text("\(model.approximateSize) · \(model == .small ? "Fast" : "More accurate, slower")")
+                Text("\(model.approximateSize) · \(model == .small ? "Fastest, recommended" : "Larger and slower")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 10)
-            if downloading {
-                ProgressView().controlSize(.small)
-                Button("Cancel") { modelDownloader.cancel() }.controlSize(.small)
+            if downloading && modelDownloader.phase != .awaitingCleanup {
+                VStack(alignment: .trailing, spacing: 4) {
+                    if let fraction = modelDownloader.fraction {
+                        ProgressView(value: fraction).frame(width: 116)
+                        Text("\(StorageCapacity.formatted(modelDownloader.received)) of \(StorageCapacity.formatted(modelDownloader.total))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ProgressView("Checking storage…").controlSize(.small)
+                    }
+                    Button("Cancel") { modelDownloader.cancel() }.controlSize(.small)
+                }
+            } else if modelDownloader.active == model && modelDownloader.phase == .awaitingCleanup {
+                VStack(alignment: .trailing, spacing: 6) {
+                    Label(
+                        "\(StorageCapacity.formatted(modelDownloader.preflight?.incompleteBytes ?? 0)) partial",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Button("Clear and Continue…") { modelDownloader.requestCleanup() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    HStack(spacing: 10) {
+                        Button("Keep and Continue") { modelDownloader.downloadAnyway() }
+                            .buttonStyle(.link)
+                        Button("Cancel") { modelDownloader.cancel() }
+                            .buttonStyle(.link)
+                    }
+                    .font(.caption)
+                }
             } else if state.isInstalled {
                 Button(settings.model == model ? "Selected" : "Use") {
                     settings.model = model
@@ -200,6 +313,17 @@ struct OnboardingView: View {
     private func modelInstallState(_ model: ASRModel) -> ModelInstallState {
         _ = modelReloadToken
         return ModelCatalog.state(for: model)
+    }
+
+    /// Start the expensive model warm-up as soon as both downloads are done.
+    /// The remaining permission and preference steps usually hide the entire
+    /// cold-start cost before the user reaches "Start Dictating".
+    private func notifyWhenPrerequisitesAreReady() {
+        guard !didNotifyPrerequisitesReady,
+              runtime.isReady,
+              modelInstallState(settings.model).isInstalled else { return }
+        didNotifyPrerequisitesReady = true
+        onPrerequisitesReady()
     }
 
     private var accessibilityStep: some View {
@@ -372,7 +496,7 @@ struct OnboardingView: View {
                 .frame(width: 88, height: 88)
 
             VStack(spacing: 10) {
-                Text("You're all set")
+                Text(permissions.allGranted ? "You're all set" : "Finish setup later")
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
 
                 Text(readyBlurb)
@@ -385,6 +509,9 @@ struct OnboardingView: View {
     }
 
     private var readyBlurb: String {
+        guard permissions.allGranted else {
+            return "Your engine and model are ready. Grant Microphone and Accessibility in System Settings before dictating."
+        }
         switch settings.activationMode {
         case .hold:
             return "Hold \(settings.triggerKey.label) anywhere, speak,\nand let go. Your words appear at the cursor."
@@ -439,7 +566,7 @@ struct OnboardingView: View {
     private var primaryLabel: String {
         switch step {
         case .welcome: return "Get Started"
-        case .ready: return "Start Dictating"
+        case .ready: return permissions.allGranted ? "Start Dictating" : "Finish Setup"
         default: return "Continue"
         }
     }

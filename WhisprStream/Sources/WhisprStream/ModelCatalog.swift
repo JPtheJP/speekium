@@ -22,9 +22,9 @@ enum ASRModel: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .small:
-            return "The default. Transcribes a 12-second utterance in about 0.3 s, which is what makes the live preview feel instant."
+            return "The fastest, broadest-compatible option for most Macs."
         case .large:
-            return "Roughly three times the compute. May read harder audio better, but every live pass costs proportionally more — unmeasured on your voice."
+            return "Larger and slower; may improve difficult audio. Best with 16 GB or more unified memory."
         }
     }
 
@@ -32,8 +32,8 @@ enum ASRModel: String, CaseIterable, Identifiable {
     /// the Hub at download time; this is only to set expectations beforehand.
     var approximateSize: String {
         switch self {
-        case .small: return "~1.2 GB"
-        case .large: return "~4 GB"
+        case .small: return "~1.9 GB"
+        case .large: return "~4.3 GB"
         }
     }
 
@@ -63,7 +63,7 @@ enum ModelCatalog {
     /// process-only: developer testing never hides, deletes, or creates a real
     /// Hugging Face cache entry.
     static var isDeveloperTestMode: Bool {
-        ProcessInfo.processInfo.environment["WHISPR_TEST_FIRST_RUN"] == "1"
+        DeveloperTestMode.isEnabled
     }
     private static var simulatedInstalledModels = Set<ASRModel>()
 
@@ -106,6 +106,26 @@ enum ModelCatalog {
             return .installed
         }
         return .partial(bytes: downloadedBytes(in: repo))
+    }
+
+    static func incompleteBytes(for model: ASRModel) -> Int64 {
+        let blobs = cacheRoot
+            .appendingPathComponent(model.cacheFolderName)
+            .appendingPathComponent("blobs")
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: blobs,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return files.reduce(into: Int64(0)) { total, file in
+            guard file.lastPathComponent.hasSuffix(".incomplete"),
+                  let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]),
+                  values.isRegularFile == true,
+                  values.isSymbolicLink != true,
+                  let size = values.fileSize,
+                  size >= 0 else { return }
+            total += Int64(size)
+        }
     }
 
     /// A snapshot is usable when its weights are all present.
@@ -154,5 +174,13 @@ enum ModelCatalog {
         f.allowedUnits = [.useGB, .useMB]
         f.countStyle = .file
         return f.string(fromByteCount: bytes)
+    }
+
+    static var hardwareGuidance: String {
+        let sixteenGB = 16 * 1024 * 1024 * 1024
+        if ProcessInfo.processInfo.physicalMemory < UInt64(sixteenGB) {
+            return "The larger model is allowed on this Mac, but 1.7B may create memory pressure and respond more slowly."
+        }
+        return "Both models are supported. 0.6B is the faster default; 1.7B is a reasonable optional choice on Macs with 16 GB or more unified memory."
     }
 }

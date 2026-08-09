@@ -15,6 +15,8 @@ enum Main {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let speechEngineStartupTimeout: TimeInterval = 20
+
     private let state = AppState()
     private let settings = Settings.shared
     private let windows = AppWindows()
@@ -26,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: HotKeyMonitor!
     private var asr: ASRService!
     private var dismissWork: DispatchWorkItem?
+    private var isASRReady = false
+    private var speechEngineGeneration = 0
+    private var speechEngineStartedAt: TimeInterval?
+    private var speechEngineStartupWork: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = HUDPanel(state: state)
@@ -38,7 +44,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let trusted = AXIsProcessTrusted()
         Log.write("launch: accessibility=\(trusted ? "granted" : "DENIED") "
-                  + "onboarded=\(settings.hasCompletedOnboarding)")
+                  + "onboarded=\(settings.hasCompletedOnboarding) "
+                  + "developerTestMode=\(DeveloperTestMode.isEnabled)")
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openDeveloperTestSetup),
+            name: .whisprDeveloperTestModeActivated,
+            object: nil
+        )
 
         if runtime.isReady, ModelCatalog.state(for: settings.model).isInstalled {
             startSpeechEngine()
@@ -47,10 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 AVCaptureDevice.requestAccess(for: .audio) { _ in }
                 if !trusted { HotKeyMonitor.ensureAccessibility() }
             } else {
-                windows.showOnboarding(settings: settings, runtime: runtime) { [weak self] in
-                    self?.settings.hasCompletedOnboarding = true
-                    self?.startSpeechEngine()
-                }
+                showOnboarding()
             }
         } else {
             presentSetup()
@@ -58,14 +68,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(self, name: .whisprDeveloperTestModeActivated, object: nil)
         hotkey?.stop()
+        speechEngineStartupWork?.cancel()
         asr?.shutdown()
     }
 
     // MARK: - Wiring
 
     private func presentSetup() {
-        windows.showOnboarding(settings: settings, runtime: runtime) { [weak self] in
+        showOnboarding()
+    }
+
+    private func showOnboarding() {
+        windows.showOnboarding(
+            settings: settings,
+            runtime: runtime,
+            onPrerequisitesReady: { [weak self] in self?.startSpeechEngine() }
+        ) { [weak self] in
             guard let self else { return }
             self.settings.hasCompletedOnboarding = true
             self.startSpeechEngine()
@@ -74,10 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startSpeechEngine() {
         guard asr == nil else { return }
+        isASRReady = false
+        state.phase = .loading
         do {
-            asr = try makeService()
-            asr.onEvent = { [weak self] in self?.handle($0) }
-            try asr.start()
+            try launchSpeechEngine()
         } catch {
             state.phase = .failed("Could not start the ASR engine")
             panel.present()
@@ -103,6 +123,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.state.level = self.state.level * 0.55 + CGFloat(level) * 0.45
             }
         }
+        refreshStatusMenu()
+    }
+
+    private func launchSpeechEngine() throws {
+        speechEngineGeneration &+= 1
+        let generation = speechEngineGeneration
+        let service = try makeService()
+        service.onEvent = { [weak self] event in
+            guard let self, self.speechEngineGeneration == generation else { return }
+            self.handle(event)
+        }
+        speechEngineStartedAt = ProcessInfo.processInfo.systemUptime
+        try service.start()
+        asr = service
+        armSpeechEngineStartupTimeout(generation: generation)
+    }
+
+    private func armSpeechEngineStartupTimeout(generation: Int) {
+        speechEngineStartupWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.speechEngineGeneration == generation,
+                  !self.isASRReady else { return }
+            Log.write("speech engine startup timed out after \(Int(Self.speechEngineStartupTimeout))s")
+            self.settings.isReloadingModel = false
+            self.speechEngineGeneration &+= 1
+            self.asr?.shutdown()
+            self.asr = nil
+            self.state.phase = .failed("Speech engine took too long to start")
+            self.panel.present()
+            self.refreshStatusMenu()
+        }
+        speechEngineStartupWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.speechEngineStartupTimeout,
+            execute: work
+        )
     }
 
     private func makeService() throws -> ASRService {
@@ -141,13 +198,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dismissNow()
         }
 
+        speechEngineStartupWork?.cancel()
+        speechEngineGeneration &+= 1
+        isASRReady = false
+        speechEngineStartedAt = nil
         asr?.shutdown()
+        asr = nil
         settings.isReloadingModel = true
 
         do {
-            asr = try makeService()
-            asr.onEvent = { [weak self] in self?.handle($0) }
-            try asr.start()
+            try launchSpeechEngine()
         } catch {
             settings.isReloadingModel = false
             state.phase = .failed("Could not start the ASR engine")
@@ -172,8 +232,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         let verb = settings.activationMode == .hold ? "Hold" : "Tap"
+        let hintTitle: String
+        if isASRReady {
+            hintTitle = "\(verb) \(settings.triggerKey.symbol) \(settings.triggerKey.label) to dictate"
+        } else if asr != nil {
+            hintTitle = "Speech engine warming up…"
+        } else {
+            hintTitle = "Speech engine unavailable"
+        }
         let hint = NSMenuItem(
-            title: "\(verb) \(settings.triggerKey.symbol) \(settings.triggerKey.label) to dictate",
+            title: hintTitle,
             action: nil, keyEquivalent: ""
         )
         hint.isEnabled = false
@@ -199,16 +267,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() { windows.showSettings(settings, runtime: runtime) }
     @objc private func openAbout() { windows.showAbout() }
 
-    @objc private func openOnboarding() {
-        windows.showOnboarding(settings: settings, runtime: runtime) { [weak self] in
-            self?.settings.hasCompletedOnboarding = true
-            self?.startSpeechEngine()
-        }
-    }
+    @objc private func openDeveloperTestSetup() { presentSetup() }
+
+    @objc private func openOnboarding() { showOnboarding() }
 
     // MARK: - Dictation lifecycle
 
     private func beginDictation() {
+        guard isASRReady else {
+            guard asr != nil else {
+                state.phase = .failed("Speech engine is not running")
+                panel.present()
+                scheduleDismiss(after: 1.8)
+                return
+            }
+            state.phase = .loading
+            panel.present()
+            return
+        }
         guard state.phase != .listening else { return }
         dismissWork?.cancel()
         state.reset()
@@ -236,9 +312,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handle(_ event: ASRService.Event) {
         switch event {
-        case .ready:
+        case let .ready(ms):
+            let wallMS = speechEngineStartedAt.map {
+                Int((ProcessInfo.processInfo.systemUptime - $0) * 1000)
+            } ?? ms
+            Log.write("speech engine ready: reported=\(ms)ms wall=\(wallMS)ms")
+            speechEngineStartupWork?.cancel()
+            speechEngineStartupWork = nil
+            speechEngineStartedAt = nil
+            isASRReady = true
             settings.isReloadingModel = false
-            if state.phase == .loading { state.phase = .idle }
+            if state.phase == .loading {
+                if panel.isVisible {
+                    dismissNow()
+                } else {
+                    state.phase = .idle
+                }
+            }
             refreshStatusMenu()
 
         case let .partial(committed, tail):
@@ -284,8 +374,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleDismiss(after: 0.42)
 
         case let .error(message):
+            if !isASRReady {
+                speechEngineStartupWork?.cancel()
+                speechEngineStartupWork = nil
+                speechEngineStartedAt = nil
+                Log.write("speech engine startup failed: \(message)")
+                speechEngineGeneration &+= 1
+                asr?.shutdown()
+                asr = nil
+                settings.isReloadingModel = false
+                refreshStatusMenu()
+            }
             state.stopDictationTimer()
             state.phase = .failed(message)
+            scheduleDismiss(after: 1.8)
+
+        case let .terminated(message):
+            speechEngineStartupWork?.cancel()
+            speechEngineStartupWork = nil
+            speechEngineStartedAt = nil
+            speechEngineGeneration &+= 1
+            isASRReady = false
+            asr = nil
+            settings.isReloadingModel = false
+            state.stopDictationTimer()
+            state.phase = .failed(message)
+            refreshStatusMenu()
             scheduleDismiss(after: 1.8)
         }
     }

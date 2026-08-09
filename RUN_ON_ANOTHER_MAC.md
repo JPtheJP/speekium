@@ -1,8 +1,8 @@
 # Run WhisprStream on another Apple Silicon Mac
 
-WhisprStream runs natively on Apple Silicon. The source code and model cache
-can be shared or cloned, but the Python virtual environment and app bundle
-should be created on each Mac because the bundle stores that Mac's Python path.
+This document is for contributors building from source. Normal users should
+follow [INSTALL.md](INSTALL.md) and download the GitHub Release; they do not
+need Python, Xcode, Homebrew, or a virtual environment.
 
 ## One-time setup
 
@@ -26,15 +26,14 @@ should be created on each Mac because the bundle stores that Mac's Python path.
 4. In the app, allow Microphone access. Also enable WhisprStream under
    System Settings → Privacy & Security → Accessibility so the global hotkey
    and paste action work.
-5. Open Settings → Model and download `Qwen3-ASR 0.6B` (about 1.2 GB). The
+5. Open Settings → Model and download `Qwen3-ASR 0.6B` (about 1.9 GB). The
    model is downloaded separately on each Mac and stays on-device.
 
 ## If you only want to copy the finished app
 
-That is not sufficient by itself: the app needs the MLX Python packages and
-model weights, and the current build embeds an absolute Python path. Rebuild
-the app on the destination Mac using the commands above. This also creates a
-stable local code-signing identity if you follow
+That is not sufficient by itself for a source build: the app needs the MLX
+Python packages and model weights. Rebuild the app on the destination Mac using
+the commands above. This also creates a stable local code-signing identity if you follow
 `WhisprStream/make-signing-cert.md`.
 
 ## Updating the app
@@ -49,4 +48,3 @@ open WhisprStream.app
 Your model cache and app settings remain in your user Library. If the app was
 rebuilt ad-hoc, re-add it in Accessibility after each rebuild; a stable
 self-signed identity avoids that reset.
-

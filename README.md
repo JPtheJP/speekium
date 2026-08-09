@@ -20,13 +20,39 @@ WhisprStream is an open-source macOS dictation app that types at your cursor whi
 - Non-streaming models can still produce a live preview: WhisprStream repeatedly re-reads the growing utterance and settles the stable words
 - No account, server, or audio upload
 
-## Requirements
+## Install WhisprStream
+
+### Requirements
 
 - macOS 14 or later
 - Apple silicon Mac
-- Python 3.12 and Xcode
+- Approximately 3 GB free for the speech engine and recommended 0.6B model
 
-## Build and run
+### Download and first launch
+
+1. Open [GitHub Releases](https://github.com/Leo6Leo/whispr-stream/releases), download `WhisprStream-macos-arm64.zip` from the latest published release, extract it, and move **WhisprStream** to Applications.
+2. Open the app. Public builds are self-signed but not notarized, so the first launch may require **System Settings → Privacy & Security → Open Anyway**. Do not disable Gatekeeper.
+3. Follow Setup Guide to download the private speech engine. The app checks free space, verifies the archive, installs it in Application Support, and runs a health check before using it.
+4. Choose a speech model. Qwen3-ASR 0.6B is the recommended download at approximately 1.9 GB. Qwen3-ASR 1.7B is approximately 4.3 GB and is best suited to Macs with at least 16 GB of unified memory.
+5. Grant Microphone and Accessibility access, or finish those steps later from **Settings → Permissions**.
+
+The native app, speech engine, and model are separate. The engine and model are downloaded only when needed, remain on your Mac, and survive normal app updates. No Python, Homebrew, pip, Xcode, Terminal, account, or audio upload is required. See the full [installation and recovery guide](INSTALL.md).
+
+### Interrupted downloads and repair
+
+- If an engine installation fails, open **Settings → Engine** and use **Install** or **Repair / Reinstall**. This replaces only the managed engine.
+- If a model download is interrupted, open **Settings → Model** and choose **Clear Partial Data**. Cleanup is limited to unfinished files for that model; installed models and settings are untouched.
+- A cancelled or crashed model download releases its lock automatically, so stale state cannot permanently block cleanup.
+- **Settings → About → Check for Updates** opens the latest stable release when an update is available. Replacing the app preserves the engine, model cache, preferences, vocabulary, and shortcuts.
+
+### Build from source
+
+Source builds require:
+
+- Xcode
+- Python 3.12
+
+The developer setup remains:
 
 ```bash
 ./setup-mac.sh
@@ -34,7 +60,13 @@ WhisprStream/build.sh
 open WhisprStream.app
 ```
 
-On first launch, open Settings → Model to download the speech model. Hold the Right Option key, speak, and release; the transcript is inserted into the active app.
+Source builds use the prepared local development engine and show **Development engine ready** in Settings. Open **Settings → Model** to download a model. To exercise the download UI without changing real runtime or model files, quit the app and launch it with:
+
+```bash
+WHISPR_TEST_FIRST_RUN=1 WhisprStream.app/Contents/MacOS/WhisprStream
+```
+
+Hold the Right Option key, speak, and release; the transcript is inserted into the active app.
 
 ## Open source and model flexibility
 

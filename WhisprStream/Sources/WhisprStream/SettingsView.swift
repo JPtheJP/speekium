@@ -36,12 +36,13 @@ struct SettingsView: View {
         case .shortcuts: VoiceShortcutsView(settings: settings)
         case .permissions: PermissionsTab()
         case .engine: RuntimeTab(runtime: runtime)
+        case .about: AboutTab(settings: settings)
         }
     }
 }
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, model, sound, shortcuts, permissions, engine
+    case general, model, sound, shortcuts, permissions, engine, about
 
     var id: Self { self }
 
@@ -53,6 +54,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .shortcuts: "Shortcuts"
         case .permissions: "Permissions"
         case .engine: "Engine"
+        case .about: "About"
         }
     }
 
@@ -64,6 +66,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .shortcuts: "text.badge.plus"
         case .permissions: "lock.shield"
         case .engine: "cpu"
+        case .about: "info.circle"
         }
     }
 }
@@ -77,24 +80,69 @@ private struct RuntimeTab: View {
                 LabeledContent("Status") {
                     switch runtime.phase {
                     case .ready:
-                        Label("Installed", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
+                        VStack(alignment: .trailing, spacing: 5) {
+                            Label(
+                                runtime.isUsingDevelopmentEngine ? "Development engine ready" : "Ready",
+                                systemImage: "checkmark.circle.fill"
+                            )
+                                .foregroundStyle(.green)
+                            if runtime.canManageEngineInstallation && !runtime.isDeveloperTestMode {
+                                Button("Repair / Reinstall") { runtime.install() }
+                                    .buttonStyle(.link)
+                                    .font(.caption)
+                            }
+                        }
                     case .missing: Text("Not installed")
+                    case .checking: ProgressView("Checking…")
+                    case .checkingStorage: ProgressView("Checking storage…")
+                    case let .insufficientStorage(required, available):
+                        VStack(alignment: .trailing, spacing: 5) {
+                            Text("Need \(StorageCapacity.formatted(required)); \(StorageCapacity.formatted(available)) available")
+                                .foregroundStyle(.red)
+                            HStack {
+                                Button("Manage Storage…") { StorageCapacity.openStorageSettings() }
+                                Button("Try Again") { runtime.install() }
+                            }
+                        }
                     case .downloading: ProgressView()
-                    case .installing: ProgressView()
+                    case .verifying: ProgressView("Verifying…")
+                    case .installing: ProgressView("Installing…")
                     case let .failed(message): Text(message).foregroundStyle(.red)
+                    case let .incompatible(message):
+                        VStack(alignment: .trailing, spacing: 5) {
+                            Text(message).foregroundStyle(.red).multilineTextAlignment(.trailing)
+                            if runtime.canManageEngineInstallation {
+                                Button("Repair / Reinstall") { runtime.install() }
+                            }
+                        }
                     }
                 }
                 if runtime.isReady {
-                    Text("The engine is stored in Application Support, separately from the app bundle. Models are downloaded only when you choose one.")
+                    Text(runtime.isUsingDevelopmentEngine
+                         ? "This local build uses the prepared development engine. Downloadable repair is available in configured release builds."
+                         : "The engine is stored in Application Support, separately from the app bundle. Models are downloaded only when you choose one.")
                         .foregroundStyle(.secondary)
                     if runtime.isDeveloperTestMode {
                         Button("Reset simulated first run") { runtime.resetDeveloperTestInstall() }
                         Text("This changes no real files. Quit and relaunch with the test flag to run onboarding again.")
                             .foregroundStyle(.secondary)
+                    } else if runtime.isDeveloperTestModeAvailable {
+                        Button("Enter simulated first run") { runtime.activateDeveloperTestMode() }
+                        Text("Development-only: simulates engine and model downloads without touching real install files.")
+                            .foregroundStyle(.secondary)
                     }
                 } else {
-                    Button("Install speech engine") { runtime.install() }
+                    if runtime.canManageEngineInstallation {
+                        Button("Install speech engine") { runtime.install() }
+                    }
+                    if runtime.isDeveloperTestModeAvailable {
+                        Button("Enter simulated first run") { runtime.activateDeveloperTestMode() }
+                        Text("Development-only: simulates engine and model downloads without touching real install files.")
+                            .foregroundStyle(.secondary)
+                    }
+                    if let summary = runtime.storageSummary {
+                        Text(summary).foregroundStyle(.secondary)
+                    }
                     if let message = runtime.installMessage {
                         Text(message).foregroundStyle(.secondary)
                     }
@@ -102,6 +150,19 @@ private struct RuntimeTab: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { runtime.refresh() }
+        .alert(
+            "Replace speech engine?",
+            isPresented: Binding(
+                get: { runtime.requiresRepairConfirmation },
+                set: { if !$0 { runtime.cancelRepairConfirmation() } }
+            )
+        ) {
+            Button("Repair / Reinstall", role: .destructive) { runtime.confirmRepairInstall() }
+            Button("Cancel", role: .cancel) { runtime.cancelRepairConfirmation() }
+        } message: {
+            Text("This replaces the engine only. Models, preferences, vocabulary, and shortcuts stay on this Mac.")
+        }
     }
 }
 
@@ -196,6 +257,7 @@ private struct ModelTab: View {
                     } else {
                         Text("Switching models restarts the speech engine and reloads the weights, which takes a couple of seconds. Everything stays on this Mac.")
                     }
+                    Text(ModelCatalog.hardwareGuidance)
                 }
                 .foregroundStyle(.secondary)
                 .font(.callout)
@@ -208,6 +270,23 @@ private struct ModelTab: View {
             for: NSApplication.didBecomeActiveNotification)) { _ in reloadToken &+= 1 }
         .task {
             downloader.onFinish = { _, _ in reloadToken &+= 1 }
+        }
+        .alert(
+            "Clear partial model data?",
+            isPresented: Binding(
+                get: { downloader.cleanupPrompt != nil },
+                set: { if !$0 { downloader.dismissCleanupPrompt() } }
+            )
+        ) {
+            Button(
+                downloader.cleanupWillContinueDownload ? "Clear and Continue" : "Clear Partial Data",
+                role: .destructive
+            ) {
+                downloader.removeIncompleteDownload()
+            }
+            Button("Keep It", role: .cancel) { downloader.dismissCleanupPrompt() }
+        } message: {
+            Text("This unfinished data cannot be resumed. Only partial files for this model will be cleared; installed models and settings are unchanged.")
         }
     }
 
@@ -241,7 +320,7 @@ private struct ModelRow: View {
 
     @ViewBuilder
     private var trailing: some View {
-        if isDownloading {
+        if isDownloading && downloader.phase != .awaitingCleanup {
             VStack(alignment: .trailing, spacing: 4) {
                 if let fraction = downloader.fraction {
                     ProgressView(value: fraction).frame(width: 116)
@@ -254,6 +333,24 @@ private struct ModelRow: View {
                 }
                 Button("Cancel") { downloader.cancel() }
                     .controlSize(.small)
+            }
+        } else if isDownloading && downloader.phase == .awaitingCleanup {
+            VStack(alignment: .trailing, spacing: 6) {
+                Label(
+                    "\(StorageCapacity.formatted(downloader.preflight?.incompleteBytes ?? 0)) partial",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Button("Clear and Continue…") { downloader.requestCleanup() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                HStack(spacing: 10) {
+                    Button("Keep and Continue") { downloader.downloadAnyway() }
+                    Button("Cancel") { downloader.cancel() }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
             }
         } else if state.isInstalled {
             if isSelected {
@@ -269,6 +366,14 @@ private struct ModelRow: View {
                 Button("Download") { downloader.start(model) }
                     .disabled(downloader.isRunning)
                 Text(sizeLabel).font(.caption).foregroundStyle(.secondary)
+                let incomplete = ModelCatalog.incompleteBytes(for: model)
+                if incomplete > 0 {
+                    Button("Clear \(ModelCatalog.formatted(bytes: incomplete)) Partial Data…") {
+                        downloader.requestCleanup(for: model)
+                    }
+                    .buttonStyle(.link)
+                        .controlSize(.small)
+                }
             }
         }
     }
@@ -422,6 +527,100 @@ private struct PermissionRow: View {
 }
 
 // MARK: - About
+
+private struct AboutTab: View {
+    @ObservedObject var settings: Settings
+    @StateObject private var updates = AppUpdateManager()
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+    }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "waveform")
+                .font(.system(size: 46, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+                .padding(.top, 34)
+
+            VStack(spacing: 5) {
+                Text("WhisprStream")
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                Text("Version \(version)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("On-device dictation for macOS.\nHandles Chinese and English mixed in one sentence.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+                .padding(.horizontal, 30)
+
+            VStack(spacing: 6) {
+                detail("Speech model", "\(settings.model.label) · 8-bit")
+                detail("Runtime", "MLX on Apple Silicon")
+                detail("Network", "None — audio never leaves this Mac")
+            }
+            .padding(.top, 4)
+
+            updateSection
+
+            Spacer()
+        }
+        .onAppear { updates.checkForUpdates() }
+    }
+
+    private func detail(_ key: String, _ value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(key)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .frame(width: 96, alignment: .trailing)
+            Text(value)
+                .font(.system(size: 11.5, weight: .medium))
+                .frame(width: 210, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var updateSection: some View {
+        VStack(spacing: 7) {
+            switch updates.status {
+            case .idle, .checking:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking for updates…")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            case .upToDate:
+                Label("WhisprStream is up to date", systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.green)
+            case let .available(release):
+                VStack(spacing: 6) {
+                    Text("Version \(release.version) is available")
+                        .font(.callout.weight(.medium))
+                    Button("Download Update…", action: updates.openAvailableRelease)
+                    Button("Check Again", action: updates.checkForUpdates)
+                        .buttonStyle(.link)
+                        .font(.caption)
+                }
+            case let .failed(message):
+                VStack(spacing: 5) {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Check for Updates", action: updates.checkForUpdates)
+                }
+            }
+        }
+        .multilineTextAlignment(.center)
+        .padding(.top, 4)
+    }
+}
 
 struct AboutView: View {
     private var version: String {

@@ -17,6 +17,7 @@ final class AppWindows {
     func showOnboarding(
         settings appSettings: Settings,
         runtime: RuntimeManager,
+        onPrerequisitesReady: @escaping () -> Void,
         onFinish: @escaping () -> Void
     ) {
         if let onboarding {
@@ -31,7 +32,11 @@ final class AppWindows {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
 
-        let view = OnboardingView(settings: appSettings, runtime: runtime) { [weak self] in
+        let view = OnboardingView(
+            settings: appSettings,
+            runtime: runtime,
+            onPrerequisitesReady: onPrerequisitesReady
+        ) { [weak self] in
             onFinish()
             self?.onboarding?.close()
             self?.onboarding = nil
@@ -49,7 +54,7 @@ final class AppWindows {
             present(settings)
             return
         }
-        let window = makeWindow(title: "Settings", styleMask: [.titled, .closable])
+        let window = makeWindow(title: "Settings - WhisprStream", styleMask: [.titled, .closable])
         let host = NSHostingView(rootView: SettingsView(settings: appSettings, runtime: runtime))
         window.contentView = host
         // Let the tabbed form declare its own size rather than forcing one —

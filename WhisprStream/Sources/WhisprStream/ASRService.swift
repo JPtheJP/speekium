@@ -1,8 +1,9 @@
+import Darwin
 import Foundation
 
 /// Drives the Python ASR sidecar over newline-delimited JSON.
 ///
-/// The model load is expensive (~0.9s) and must happen exactly once, so the
+/// The model load takes several seconds and must happen exactly once, so the
 /// process is started at launch and kept alive for the lifetime of the app.
 final class ASRService {
     enum Event {
@@ -10,6 +11,7 @@ final class ASRService {
         case partial(committed: String, tail: String)
         case final(text: String, secs: Double, ms: Int)
         case error(String)
+        case terminated(String)
     }
 
     private let process = Process()
@@ -17,23 +19,30 @@ final class ASRService {
     private let outPipe = Pipe()
     private var buffer = Data()
     private let queue = DispatchQueue(label: "asr.stdout")
+    private let writerQueue = DispatchQueue(label: "asr.stdin")
+    private let commandStateLock = NSLock()
+    private var acceptsCommands = true
+    private var shutdownRequested = false
 
     var onEvent: ((Event) -> Void)?
 
     init(python: URL, script: URL, model: String, bits: Int, context: String) {
         process.executableURL = python
-        process.arguments = [script.path]
+        process.arguments = PythonProcessEnvironment.scriptArguments(script: script)
         process.standardInput = inPipe
         process.standardOutput = outPipe
+        // A sidecar can exit while a queued audio write is in flight. Suppress
+        // SIGPIPE for this descriptor so that becomes a handled EPIPE instead
+        // of terminating the whole app.
+        _ = fcntl(inPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         // Keep stderr: without it a failing sidecar is silent and undebuggable.
         process.standardError = ASRService.makeLogHandle() ?? FileHandle.nullDevice
 
-        var env = ProcessInfo.processInfo.environment
-        env["WHISPR_MODEL"] = model
-        env["WHISPR_BITS"] = String(bits)
-        env["WHISPR_CONTEXT"] = context
-        env["PYTHONUNBUFFERED"] = "1"
-        process.environment = env
+        process.environment = PythonProcessEnvironment.sanitized(additions: [
+            "WHISPR_MODEL": model,
+            "WHISPR_BITS": String(bits),
+            "WHISPR_CONTEXT": context,
+        ])
     }
 
     /// ~/Library/Logs/WhisprStream.log — where sidecar stderr goes.
@@ -59,6 +68,13 @@ final class ASRService {
             let data = handle.availableData
             guard !data.isEmpty else { return }
             self?.queue.async { self?.ingest(data) }
+        }
+        process.terminationHandler = { [weak self] process in
+            guard let self, self.handleProcessTermination() else { return }
+            Log.write("speech engine exited unexpectedly: status=\(process.terminationStatus)")
+            DispatchQueue.main.async {
+                self.onEvent?(.terminated("Speech engine stopped unexpectedly"))
+            }
         }
         try process.run()
     }
@@ -111,7 +127,56 @@ final class ASRService {
     private func send(_ dict: [String: Any]) {
         guard var data = try? JSONSerialization.data(withJSONObject: dict) else { return }
         data.append(0x0A)
-        inPipe.fileHandleForWriting.write(data)
+        guard isAcceptingCommands else { return }
+        writerQueue.async { [weak self] in
+            guard let self, self.isAcceptingCommands else { return }
+            self.writeToSidecar(data)
+        }
+    }
+
+    private func writeToSidecar(_ data: Data) {
+        let descriptor = inPipe.fileHandleForWriting.fileDescriptor
+        let completed = data.withUnsafeBytes { rawBuffer -> Bool in
+            guard let baseAddress = rawBuffer.baseAddress else { return true }
+            var offset = 0
+            while offset < rawBuffer.count {
+                let result = Darwin.write(
+                    descriptor,
+                    baseAddress.advanced(by: offset),
+                    rawBuffer.count - offset
+                )
+                if result > 0 {
+                    offset += result
+                } else if result == -1 && errno == EINTR {
+                    continue
+                } else {
+                    return false
+                }
+            }
+            return true
+        }
+        if !completed { stopWritingAfterFailure() }
+    }
+
+    private var isAcceptingCommands: Bool {
+        commandStateLock.lock()
+        defer { commandStateLock.unlock() }
+        return acceptsCommands
+    }
+
+    private func stopWritingAfterFailure() {
+        commandStateLock.lock()
+        acceptsCommands = false
+        commandStateLock.unlock()
+    }
+
+    /// Returns true only for an unexpected process exit. `shutdown()` marks
+    /// the service first so its termination handler stays silent.
+    private func handleProcessTermination() -> Bool {
+        commandStateLock.lock()
+        defer { commandStateLock.unlock() }
+        acceptsCommands = false
+        return !shutdownRequested
     }
 
     func beginUtterance() { send(["cmd": "start"]) }
@@ -127,7 +192,10 @@ final class ASRService {
     }
 
     func shutdown() {
-        send(["cmd": "quit"])
-        process.terminate()
+        commandStateLock.lock()
+        shutdownRequested = true
+        acceptsCommands = false
+        commandStateLock.unlock()
+        if process.isRunning { process.terminate() }
     }
 }

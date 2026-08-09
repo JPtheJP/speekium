@@ -14,18 +14,37 @@ BUILD_NUMBER="${BUILD_NUMBER:-1}"
 RELEASE="${RELEASE:-0}"
 RUNTIME_URL="${RUNTIME_URL:-}"
 RUNTIME_SHA256="${RUNTIME_SHA256:-}"
+RUNTIME_VERSION="${RUNTIME_VERSION:-}"
+RUNTIME_ARCHIVE_BYTES="${RUNTIME_ARCHIVE_BYTES:-}"
+RUNTIME_INSTALLED_BYTES="${RUNTIME_INSTALLED_BYTES:-}"
+UPDATE_REPOSITORY="${UPDATE_REPOSITORY:-Leo6Leo/whispr-stream}"
 BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-dev.local.whisprstream}"
+SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 
 if [ "$RELEASE" = "1" ]; then
-    if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ]; then
-        echo "error: release builds require RUNTIME_URL and RUNTIME_SHA256" >&2
+    if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ] || [ -z "$RUNTIME_VERSION" ] \
+        || [ -z "$RUNTIME_ARCHIVE_BYTES" ] || [ -z "$RUNTIME_INSTALLED_BYTES" ]; then
+        echo "error: release builds require runtime URL, version, checksum, and byte metadata" >&2
         exit 1
     fi
-    if ! [[ "$RUNTIME_URL" =~ ^https:// ]] || ! [[ "$RUNTIME_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
-        echo "error: RUNTIME_URL must be HTTPS and RUNTIME_SHA256 must be a SHA-256 hash" >&2
+    if ! [[ "$RUNTIME_URL" =~ ^https:// ]] || [[ "$RUNTIME_URL" == *"latest/download"* ]] \
+        || ! [[ "$RUNTIME_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
+        || ! [[ "$RUNTIME_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || ! [[ "$RUNTIME_ARCHIVE_BYTES" =~ ^[1-9][0-9]*$ ]] \
+        || ! [[ "$RUNTIME_INSTALLED_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+        echo "error: runtime URL must be immutable HTTPS, checksum must be SHA-256, and sizes must be positive integers" >&2
+        exit 1
+    fi
+    if [ "$BUNDLE_IDENTIFIER" != "com.leoleo.whisprstream" ]; then
+        echo "error: release builds require bundle identifier com.leoleo.whisprstream" >&2
+        exit 1
+    fi
+    if [ -z "$SIGNING_IDENTITY" ] || [ "$SIGNING_IDENTITY" = "-" ]; then
+        echo "error: RELEASE=1 requires SIGNING_IDENTITY; ad-hoc signing is not allowed" >&2
         exit 1
     fi
     DEVELOPMENT_PYTHON=""
+    DEVELOPMENT_PYTHON_PLIST=""
 else
     if [ ! -x "$PYTHON" ]; then
         echo "error: no python at $PYTHON" >&2
@@ -35,6 +54,7 @@ else
     # Local builds continue to use the prepared venv. RELEASE=1 deliberately
     # clears this value so no developer-specific path is shipped to users.
     DEVELOPMENT_PYTHON="$PYTHON"
+    DEVELOPMENT_PYTHON_PLIST="    <key>WhisprDevelopmentPythonPath</key><string>$DEVELOPMENT_PYTHON</string>"
 fi
 
 echo "▸ compiling"
@@ -77,9 +97,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>WhisprStream transcribes your speech on-device.</string>
-    <key>WhisprDevelopmentPythonPath</key><string>$DEVELOPMENT_PYTHON</string>
+$DEVELOPMENT_PYTHON_PLIST
     <key>WhisprRuntimeURL</key><string>$RUNTIME_URL</string>
     <key>WhisprRuntimeSHA256</key><string>$RUNTIME_SHA256</string>
+    <key>WhisprRuntimeVersion</key><string>$RUNTIME_VERSION</string>
+    <key>WhisprRuntimeArchiveBytes</key><string>$RUNTIME_ARCHIVE_BYTES</string>
+    <key>WhisprRuntimeInstalledBytes</key><string>$RUNTIME_INSTALLED_BYTES</string>
+    <key>WhisprUpdateRepository</key><string>$UPDATE_REPOSITORY</string>
 </dict>
 </plist>
 PLIST
@@ -92,20 +116,28 @@ PLIST
 # An ad-hoc signature is tied to the binary hash, so every rebuild looks like a
 # different app to TCC and silently drops the Accessibility grant. A self-signed
 # certificate keeps one identity across rebuilds, so the grant sticks.
-IDENTITY="-"
-# The -v flag filters to identities whose certificate chain is trusted. A local
-# self-signed identity can still sign successfully (and gives TCC a stable leaf
-# certificate) even when Keychain reports the chain as untrusted, so look
-# through all matching code-signing identities instead.
-if security find-identity -p codesigning 2>/dev/null | grep -q "WhisprStream Self-Signed"; then
-    IDENTITY="WhisprStream Self-Signed"
-    echo "▸ signing with stable identity"
+IDENTITY="$SIGNING_IDENTITY"
+if [ "$RELEASE" = "1" ]; then
+    echo "▸ signing release with $IDENTITY"
 else
-    echo "▸ signing ad-hoc (Accessibility must be re-granted after each rebuild)"
-    echo "  to fix permanently, see: make-signing-cert.md"
+    if security find-identity -p codesigning 2>/dev/null | grep -q "WhisprStream Self-Signed"; then
+        IDENTITY="WhisprStream Self-Signed"
+        echo "▸ signing with stable identity"
+    else
+        IDENTITY="-"
+        echo "▸ signing ad-hoc (Accessibility must be re-granted after each rebuild)"
+        echo "  to fix permanently, see: make-signing-cert.md"
+    fi
 fi
 
 codesign --force --deep --sign "$IDENTITY" "$APP"
+if [ "$RELEASE" = "1" ]; then
+    codesign --verify --strict --deep "$APP"
+    if /usr/libexec/PlistBuddy -c "Print :WhisprDevelopmentPythonPath" "$APP/Contents/Info.plist" >/dev/null 2>&1; then
+        echo "error: release Info.plist contains a development Python path" >&2
+        exit 1
+    fi
+fi
 
 echo "✓ built $APP"
 if [ "$RELEASE" = "1" ]; then
