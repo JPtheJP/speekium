@@ -27,7 +27,8 @@ final class ASRServiceTests: XCTestCase {
             script: script,
             model: "unused",
             bits: 8,
-            context: ""
+            context: "",
+            shortUtteranceLanguage: .english
         )
         let ready = expectation(description: "delayed sidecar becomes ready")
         service.onEvent = { event in
@@ -70,7 +71,8 @@ final class ASRServiceTests: XCTestCase {
             script: script,
             model: "unused",
             bits: 8,
-            context: ""
+            context: "",
+            shortUtteranceLanguage: .english
         )
         let ready = expectation(description: "sidecar becomes ready")
         let terminated = expectation(description: "unexpected exit is reported")

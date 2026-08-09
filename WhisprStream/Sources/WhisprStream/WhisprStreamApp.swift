@@ -116,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settings.onContextChange = { [weak self] terms in self?.asr?.setContext(terms) }
         settings.onModelChange = { [weak self] _ in self?.reloadASR() }
+        settings.onShortUtteranceLanguageChange = { [weak self] _ in self?.reloadASR() }
         capture.onBuffer = { [weak self] pcm, level in
             self?.asr?.sendAudio(pcm)
             DispatchQueue.main.async {
@@ -177,7 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             script: script,
             model: env["WHISPR_MODEL"] ?? settings.model.rawValue,
             bits: Int(env["WHISPR_BITS"] ?? "8") ?? 8,
-            context: settings.asrContext
+            context: settings.asrContext,
+            shortUtteranceLanguage: settings.shortUtteranceLanguage
         )
     }
 
@@ -354,7 +356,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let matchedID = expansion.matchedShortcutID {
                 Log.write("voice shortcut matched id=\(matchedID) inputChars=\(normalizedText.count) outputChars=\(expansion.text.count)")
             }
-            let deliveredText = expansion.text
+            // Shortcut replacements are user-authored literal output; preserve
+            // their casing even when they are inserted mid-sentence.
+            let deliveredText = settings.autoInsert && expansion.matchedShortcutID == nil
+                ? TranscriptFormatter.adjustedForCursor(
+                    expansion.text,
+                    precedingText: TextInserter.textBeforeCursor()
+                )
+                : expansion.text
             guard !deliveredText.isEmpty else {
                 dismissNow()
                 return

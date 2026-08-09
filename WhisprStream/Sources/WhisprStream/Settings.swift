@@ -76,6 +76,53 @@ enum ActivationMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Language guidance for clips too short to provide reliable language context.
+/// Longer utterances always keep automatic multilingual recognition.
+enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
+    case chinese, english, cantonese, arabic, german, french, spanish
+    case portuguese, indonesian, italian, korean, russian, thai, vietnamese
+    case japanese, turkish, hindi, malay, dutch, swedish, danish, finnish
+    case polish, czech, filipino, persian, greek, hungarian, macedonian, romanian
+
+    var id: String { rawValue }
+
+    /// Canonical names accepted by Qwen3-ASR's forced-language prompt.
+    var modelName: String {
+        switch self {
+        case .chinese: return "Chinese"
+        case .english: return "English"
+        case .cantonese: return "Cantonese"
+        case .arabic: return "Arabic"
+        case .german: return "German"
+        case .french: return "French"
+        case .spanish: return "Spanish"
+        case .portuguese: return "Portuguese"
+        case .indonesian: return "Indonesian"
+        case .italian: return "Italian"
+        case .korean: return "Korean"
+        case .russian: return "Russian"
+        case .thai: return "Thai"
+        case .vietnamese: return "Vietnamese"
+        case .japanese: return "Japanese"
+        case .turkish: return "Turkish"
+        case .hindi: return "Hindi"
+        case .malay: return "Malay"
+        case .dutch: return "Dutch"
+        case .swedish: return "Swedish"
+        case .danish: return "Danish"
+        case .finnish: return "Finnish"
+        case .polish: return "Polish"
+        case .czech: return "Czech"
+        case .filipino: return "Filipino"
+        case .persian: return "Persian"
+        case .greek: return "Greek"
+        case .hungarian: return "Hungarian"
+        case .macedonian: return "Macedonian"
+        case .romanian: return "Romanian"
+        }
+    }
+}
+
 /// User preferences, persisted to UserDefaults.
 @MainActor
 final class Settings: ObservableObject {
@@ -104,6 +151,17 @@ final class Settings: ObservableObject {
     /// not run into the previous one.
     @Published var usePunctuation: Bool {
         didSet { defaults.set(usePunctuation, forKey: Keys.usePunctuation) }
+    }
+
+    /// A user-selected tie-breaker for context-poor, very short recordings.
+    /// Changing it restarts the sidecar because preview reuse must never cross
+    /// between forced- and automatically-detected language modes.
+    @Published var shortUtteranceLanguage: ShortUtteranceLanguage {
+        didSet {
+            guard shortUtteranceLanguage != oldValue else { return }
+            defaults.set(shortUtteranceLanguage.rawValue, forKey: Keys.shortUtteranceLanguage)
+            onShortUtteranceLanguageChange?(shortUtteranceLanguage)
+        }
     }
 
     @Published var playSound: Bool {
@@ -275,6 +333,10 @@ final class Settings: ObservableObject {
     /// Fired when the model changes, to restart the sidecar on the new weights.
     var onModelChange: ((ASRModel) -> Void)?
 
+    /// Fired when short-utterance language guidance changes. Like the model,
+    /// this is a sidecar startup option and therefore requires a restart.
+    var onShortUtteranceLanguageChange: ((ShortUtteranceLanguage) -> Void)?
+
     private let defaults: UserDefaults
 
     private enum Keys {
@@ -283,6 +345,7 @@ final class Settings: ObservableObject {
         static let autoInsert = "autoInsert"
         static let copyToClipboard = "copyToClipboard"
         static let usePunctuation = "usePunctuation"
+        static let shortUtteranceLanguage = "shortUtteranceLanguage"
         static let playSound = "playSound"
         static let insertSound = "insertSound"   // pre-pairs; read once to migrate
         static let soundTheme = "soundTheme"
@@ -302,6 +365,9 @@ final class Settings: ObservableObject {
         autoInsert = defaults.object(forKey: Keys.autoInsert) as? Bool ?? true
         copyToClipboard = defaults.object(forKey: Keys.copyToClipboard) as? Bool ?? true
         usePunctuation = defaults.object(forKey: Keys.usePunctuation) as? Bool ?? true
+        shortUtteranceLanguage = ShortUtteranceLanguage(
+            rawValue: defaults.string(forKey: Keys.shortUtteranceLanguage) ?? ""
+        ) ?? .english
         playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? false
         // Migration: before pairs, the choice lived in `insertSound` as a bare
         // alert-sound name. Carry it over so an existing setting is preserved

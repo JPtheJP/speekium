@@ -26,7 +26,14 @@ final class ASRService {
 
     var onEvent: ((Event) -> Void)?
 
-    init(python: URL, script: URL, model: String, bits: Int, context: String) {
+    init(
+        python: URL,
+        script: URL,
+        model: String,
+        bits: Int,
+        context: String,
+        shortUtteranceLanguage: ShortUtteranceLanguage
+    ) {
         process.executableURL = python
         process.arguments = PythonProcessEnvironment.scriptArguments(script: script)
         process.standardInput = inPipe
@@ -42,6 +49,7 @@ final class ASRService {
             "WHISPR_MODEL": model,
             "WHISPR_BITS": String(bits),
             "WHISPR_CONTEXT": context,
+            "WHISPR_SHORT_UTTERANCE_LANGUAGE": shortUtteranceLanguage.modelName,
         ])
     }
 

@@ -213,6 +213,33 @@ private struct GeneralTab: View {
                 }
             }
 
+            Section {
+                LabeledContent("Language") {
+                    Text("Automatic")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Normal dictation")
+            } footer: {
+                Text("Sentences and clips longer than two seconds detect their language automatically, including mixed-language speech.")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+            }
+
+            Section {
+                Picker("Language", selection: $settings.shortUtteranceLanguage) {
+                    ForEach(ShortUtteranceLanguage.allCases) { language in
+                        Text(language.modelName).tag(language)
+                    }
+                }
+            } header: {
+                Text("One-word dictation")
+            } footer: {
+                Text("Choose one language for clips up to two seconds. This mainly handles isolated words, where automatic language detection has too little context and may return a translation in another language.")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+            }
+
             VocabularySection(settings: settings)
         }
         .formStyle(.grouped)

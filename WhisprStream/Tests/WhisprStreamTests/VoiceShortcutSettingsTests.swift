@@ -12,6 +12,7 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         let defaults = makeDefaults()
         let settings = Settings(defaults: defaults)
         settings.usePunctuation = false
+        settings.shortUtteranceLanguage = .english
         settings.setVocabulary(["Claude", "GitHub"])
 
         let enabled = VoiceShortcut(
@@ -27,8 +28,29 @@ final class VoiceShortcutSettingsTests: XCTestCase {
 
         let reloaded = Settings(defaults: defaults)
         XCTAssertFalse(reloaded.usePunctuation)
+        XCTAssertEqual(reloaded.shortUtteranceLanguage, .english)
         XCTAssertEqual(reloaded.voiceShortcuts, [enabled, disabled])
         XCTAssertEqual(reloaded.asrContext, "Claude\nGitHub\nhaha github")
+    }
+
+    func testOneWordDictationOffersEveryQwenLanguageWithoutAutomatic() {
+        XCTAssertEqual(ShortUtteranceLanguage.allCases.count, 30)
+        XCTAssertEqual(Set(ShortUtteranceLanguage.allCases.map(\.modelName)).count, 30)
+        XCTAssertFalse(ShortUtteranceLanguage.allCases.map(\.modelName).contains("Automatic"))
+    }
+
+    func testOneWordLanguageOnboardingFollowsSpeakingPreferences() throws {
+        let steps = OnboardingView.Step.allCases
+        let preferencesIndex = try XCTUnwrap(steps.firstIndex(of: .preferences))
+
+        XCTAssertEqual(steps[preferencesIndex + 1], .oneWordLanguage)
+    }
+
+    func testLegacyAutomaticShortLanguageMigratesToEnglish() {
+        let defaults = makeDefaults()
+        defaults.set("automatic", forKey: "shortUtteranceLanguage")
+
+        XCTAssertEqual(Settings(defaults: defaults).shortUtteranceLanguage, .english)
     }
 
     func testContextDeduplicatesIdenticalLiteralLinesAndNeverIncludesReplacement() throws {

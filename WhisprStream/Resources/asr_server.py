@@ -30,6 +30,7 @@ import numpy as np
 
 SAMPLE_RATE = 16000
 MIN_SECONDS = 0.3
+SHORT_UTTERANCE_MAX_SEC = 2.0
 POLL_INTERVAL = 0.02
 MIN_NEW_AUDIO = 0.15
 # Swift stops dictation at 45 seconds. Keep several seconds of transport/timer
@@ -133,8 +134,33 @@ def preview_audio(full_audio: np.ndarray) -> tuple[np.ndarray, int]:
     return full_audio[preview_start:], preview_start
 
 
+SUPPORTED_SHORT_UTTERANCE_LANGUAGES = (
+    "Chinese", "English", "Cantonese", "Arabic", "German", "French",
+    "Spanish", "Portuguese", "Indonesian", "Italian", "Korean", "Russian",
+    "Thai", "Vietnamese", "Japanese", "Turkish", "Hindi", "Malay", "Dutch",
+    "Swedish", "Danish", "Finnish", "Polish", "Czech", "Filipino", "Persian",
+    "Greek", "Hungarian", "Macedonian", "Romanian",
+)
+
+
+def normalize_short_utterance_language(value: str) -> str | None:
+    """Return a canonical Qwen3-ASR forced-language name."""
+    normalized = (value or "").strip().casefold()
+    return next(
+        (name for name in SUPPORTED_SHORT_UTTERANCE_LANGUAGES
+         if name.casefold() == normalized),
+        None,
+    )
+
+
 class Server:
-    def __init__(self, model_id: str, bits: int, context: str):
+    def __init__(
+        self,
+        model_id: str,
+        bits: int,
+        context: str,
+        short_utterance_language: str = "English",
+    ):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from asr_engine import build_session
 
@@ -143,6 +169,9 @@ class Server:
 
         self.lock = threading.Lock()
         self.context = context
+        self.short_utterance_language = normalize_short_utterance_language(
+            short_utterance_language
+        )
         self._context_revision = 0
         self.buf = np.zeros(0, dtype=np.float32)
         self.active = False
@@ -152,13 +181,22 @@ class Server:
         self._last_preview_len = 0
         self._last_preview_start = 0
         self._last_preview_context_revision = -1
+        self._last_preview_language: str | None = None
         self._last_preview_stable = False
         self._thread: threading.Thread | None = None
         self._preview_stop = threading.Event()
 
     # -- transcription -------------------------------------------------
+    def _language_for_audio(self, audio: np.ndarray) -> str | None:
+        if len(audio) <= int(SHORT_UTTERANCE_MAX_SEC * SAMPLE_RATE):
+            return self.short_utterance_language
+        return None
+
     def _decode(self, audio: np.ndarray, context: str) -> str:
         kw = {"context": context} if context else {}
+        language = self._language_for_audio(audio)
+        if language:
+            kw["language"] = language
         return (self.session.transcribe(audio, **kw).text or "").strip()
 
     def _reusable_preview(
@@ -172,9 +210,15 @@ class Server:
             decoded_len = self._last_preview_len
             decoded_start = self._last_preview_start
             decoded_revision = self._last_preview_context_revision
+            decoded_language = self._last_preview_language
             stable = self._last_preview_stable
 
         if text is None or decoded_revision != context_revision:
+            return None
+        # A preview decoded while the short-clip preference applied must not be
+        # reused if the final buffer has since crossed into automatic language
+        # detection (or vice versa).
+        if decoded_language != self._language_for_audio(audio):
             return None
         # A rolling-window preview intentionally contains only the recent HUD
         # text. It can never stand in for the full authoritative transcript.
@@ -261,6 +305,7 @@ class Server:
                     self._last_preview_len = full_len
                     self._last_preview_start = preview_start
                     self._last_preview_context_revision = context_revision
+                    self._last_preview_language = self._language_for_audio(audio)
                     self._last_preview_stable = stable
                 if self.active:
                     emit({
@@ -300,6 +345,7 @@ class Server:
             self._last_preview_len = 0
             self._last_preview_start = 0
             self._last_preview_context_revision = -1
+            self._last_preview_language = None
             self._last_preview_stable = False
         self.committed = ""
         self._prev = ""
@@ -388,9 +434,13 @@ def main() -> int:
     model_id = os.environ.get("WHISPR_MODEL", "Qwen/Qwen3-ASR-0.6B")
     bits = int(os.environ.get("WHISPR_BITS", "8"))
     context = os.environ.get("WHISPR_CONTEXT", "")
+    short_utterance_language = os.environ.get(
+        "WHISPR_SHORT_UTTERANCE_LANGUAGE",
+        "English",
+    )
 
     try:
-        server = Server(model_id, bits, context)
+        server = Server(model_id, bits, context, short_utterance_language)
     except Exception as e:
         emit({"type": "error", "message": f"load: {e}"})
         return 1

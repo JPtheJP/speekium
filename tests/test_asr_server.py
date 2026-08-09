@@ -2,6 +2,7 @@ import sys
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -82,6 +83,75 @@ class PreviewSchedulingTests(unittest.TestCase):
         np.testing.assert_array_equal(preview, audio[-expected_len:])
 
 
+class ShortUtteranceLanguageTests(unittest.TestCase):
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def transcribe(self, _audio, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(text=" testing ")
+
+    def make_server(self, language):
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = self.FakeSession()
+        server.short_utterance_language = language
+        return server
+
+    def test_preference_values_map_to_model_language_names(self):
+        self.assertEqual(
+            asr_server.normalize_short_utterance_language("english"),
+            "English",
+        )
+        self.assertEqual(
+            asr_server.normalize_short_utterance_language("CHINESE"),
+            "Chinese",
+        )
+        self.assertEqual(
+            asr_server.normalize_short_utterance_language("macedonian"),
+            "Macedonian",
+        )
+        self.assertIsNone(
+            asr_server.normalize_short_utterance_language("automatic")
+        )
+
+    def test_all_official_languages_are_available(self):
+        self.assertEqual(len(asr_server.SUPPORTED_SHORT_UTTERANCE_LANGUAGES), 30)
+        for language in asr_server.SUPPORTED_SHORT_UTTERANCE_LANGUAGES:
+            self.assertEqual(
+                asr_server.normalize_short_utterance_language(language),
+                language,
+            )
+
+    def test_short_clip_uses_preferred_language(self):
+        server = self.make_server("English")
+        audio = np.zeros(
+            int(asr_server.SHORT_UTTERANCE_MAX_SEC * asr_server.SAMPLE_RATE),
+            dtype=np.float32,
+        )
+
+        self.assertEqual(server._decode(audio, "Codex"), "testing")
+        self.assertEqual(
+            server.session.calls,
+            [{"context": "Codex", "language": "English"}],
+        )
+
+    def test_longer_clip_remains_automatic(self):
+        server = self.make_server("English")
+        audio = np.zeros(
+            int(asr_server.SHORT_UTTERANCE_MAX_SEC * asr_server.SAMPLE_RATE) + 1,
+            dtype=np.float32,
+        )
+
+        server._decode(audio, "")
+        self.assertEqual(server.session.calls, [{}])
+
+    def test_automatic_mode_never_forces_language(self):
+        server = self.make_server(None)
+        server._decode(np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32), "")
+        self.assertEqual(server.session.calls, [{}])
+
+
 class PreviewReuseTests(unittest.TestCase):
     def make_server(self, text="hello", decoded_len=3200, revision=2, stable=True):
         server = asr_server.Server.__new__(asr_server.Server)
@@ -90,7 +160,9 @@ class PreviewReuseTests(unittest.TestCase):
         server._last_preview_len = decoded_len
         server._last_preview_start = 0
         server._last_preview_context_revision = revision
+        server._last_preview_language = None
         server._last_preview_stable = stable
+        server.short_utterance_language = None
         return server
 
     def test_exact_buffer_is_reused(self):
@@ -130,6 +202,15 @@ class PreviewReuseTests(unittest.TestCase):
         server = self.make_server()
         audio = np.zeros(3200, dtype=np.float32)
         self.assertIsNone(server._reusable_preview(audio, 3))
+
+    def test_preview_is_not_reused_across_short_language_boundary(self):
+        decoded_len = int(1.9 * asr_server.SAMPLE_RATE)
+        server = self.make_server(decoded_len=decoded_len)
+        server.short_utterance_language = "English"
+        server._last_preview_language = "English"
+        audio = np.zeros(int(2.1 * asr_server.SAMPLE_RATE), dtype=np.float32)
+
+        self.assertIsNone(server._reusable_preview(audio, 2))
 
     def test_rolling_window_preview_is_never_reused_as_full_final(self):
         server = self.make_server(decoded_len=3200)

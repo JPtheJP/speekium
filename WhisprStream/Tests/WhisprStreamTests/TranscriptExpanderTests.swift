@@ -49,6 +49,63 @@ final class TranscriptExpanderTests: XCTestCase {
         XCTAssertEqual(TranscriptFormatter.textForInsertion("line break\n"), "line break\n")
     }
 
+    func testCursorContinuationLowercasesSentenceStyleOpening() {
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("Testing the feature.", precedingText: "I am "),
+            "testing the feature."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("Testing", precedingText: "First, "),
+            "testing"
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("“Testing”", precedingText: "She called it "),
+            "“testing”"
+        )
+    }
+
+    func testCursorSentenceBoundaryPreservesCapitalization() {
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("Testing again.", precedingText: "Done. "),
+            "Testing again."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("Testing again.", precedingText: "She said “done.” "),
+            "Testing again."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("Testing again.", precedingText: "Draft\n"),
+            "Testing again."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("Testing again.", precedingText: ""),
+            "Testing again."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("Testing again.", precedingText: nil),
+            "Testing again."
+        )
+    }
+
+    func testCursorContinuationPreservesPronounAndAcronym() {
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("I am ready.", precedingText: "and "),
+            "I am ready."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("I'm ready.", precedingText: "and "),
+            "I'm ready."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("NASA agreed.", precedingText: "then "),
+            "NASA agreed."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor("测试", precedingText: "继续"),
+            "测试"
+        )
+    }
+
     func testSpokenNumbersBecomeDigits() {
         XCTAssertEqual(SpokenNumberNormalizer.normalize("I need twenty four apples"), "I need 24 apples")
         XCTAssertEqual(SpokenNumberNormalizer.normalize("one hundred and five"), "105")
@@ -58,10 +115,37 @@ final class TranscriptExpanderTests: XCTestCase {
         XCTAssertEqual(SpokenNumberNormalizer.normalize("temperature is twenty point five degrees"), "temperature is 20.5 degrees")
     }
 
+    func testIsolatedSmallNumberWordsStayNaturalInEnglishProse() {
+        XCTAssertEqual(
+            SpokenNumberNormalizer.normalize("There is one problem"),
+            "There is one problem"
+        )
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("I won one."), "I won one.")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("version one"), "version one")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("minus five"), "-5")
+    }
+
+    func testChineseDigitSequencesAndStructuredNumbersBecomeDigits() {
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("一三五七九"), "13579")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("〇〇七"), "007")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("验证码是零一二三"), "验证码是0123")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("一百三十五"), "135")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("一千零二"), "1002")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("二点五"), "2.5")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("負二點五"), "-2.5")
+    }
+
+    func testChineseNormalizerPreservesAmbiguousLexicalUses() {
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("只有一个问题"), "只有一个问题")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("星期一见"), "星期一见")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("千万不要"), "千万不要")
+        XCTAssertEqual(SpokenNumberNormalizer.normalize("一心一意"), "一心一意")
+    }
+
     func testSpokenNumbersPreserveUnrelatedTextAndPunctuation() {
         XCTAssertEqual(
             SpokenNumberNormalizer.normalize("Please call 416-555-0100. I won one."),
-            "Please call 416-555-0100. I won 1."
+            "Please call 416-555-0100. I won one."
         )
         XCTAssertEqual(SpokenNumberNormalizer.normalize("one and two"), "one and two")
         XCTAssertEqual(SpokenNumberNormalizer.normalize("one hundred."), "100.")

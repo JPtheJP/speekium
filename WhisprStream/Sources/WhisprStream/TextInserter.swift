@@ -107,6 +107,75 @@ enum TextInserter {
         Log.write("copied \(text.count) chars (insert at cursor off)")
     }
 
+    /// Returns only the short text slice immediately before the active cursor.
+    /// Some apps do not expose editable text through Accessibility; callers
+    /// treat nil as unknown and preserve the model's capitalization.
+    static func textBeforeCursor(maxCharacters: Int = 256) -> String? {
+        guard AXIsProcessTrusted(), maxCharacters > 0 else { return nil }
+
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedValue
+        ) == .success,
+        let focusedValue,
+        CFGetTypeID(focusedValue) == AXUIElementGetTypeID()
+        else { return nil }
+        let focusedElement = focusedValue as! AXUIElement
+
+        var selectedRangeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXSelectedTextRangeAttribute as CFString,
+            &selectedRangeValue
+        ) == .success,
+        let selectedRangeValue,
+        CFGetTypeID(selectedRangeValue) == AXValueGetTypeID()
+        else { return nil }
+
+        let selectedAXValue = selectedRangeValue as! AXValue
+        var selectedRange = CFRange()
+        guard AXValueGetValue(selectedAXValue, .cfRange, &selectedRange),
+              selectedRange.location >= 0 else { return nil }
+
+        let length = min(maxCharacters, selectedRange.location)
+        guard length > 0 else { return "" }
+        var requestedRange = CFRange(
+            location: selectedRange.location - length,
+            length: length
+        )
+
+        if let rangeValue = AXValueCreate(.cfRange, &requestedRange) {
+            var substringValue: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(
+                focusedElement,
+                kAXStringForRangeParameterizedAttribute as CFString,
+                rangeValue,
+                &substringValue
+            ) == .success,
+            let substring = substringValue as? String {
+                return substring
+            }
+        }
+
+        // Native controls commonly expose a complete value but not the
+        // parameterized range API. Read only the final slice from that value.
+        var completeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXValueAttribute as CFString,
+            &completeValue
+        ) == .success,
+        let completeText = completeValue as? String else { return nil }
+
+        let utf16Text = completeText as NSString
+        let cursor = min(selectedRange.location, utf16Text.length)
+        let start = max(0, cursor - maxCharacters)
+        return utf16Text.substring(with: NSRange(location: start, length: cursor - start))
+    }
+
     private static func pressCommandV() {
         // .hidSystemState + .cghidEventTap is the combination that actually
         // reaches other applications; session taps get dropped for synthetic

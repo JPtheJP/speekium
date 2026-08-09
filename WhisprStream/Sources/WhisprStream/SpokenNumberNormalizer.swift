@@ -1,11 +1,13 @@
 import Foundation
 
-/// Converts English number words in a finished transcript to digits.
+/// Converts unambiguous English and Chinese number phrases in a finished
+/// transcript to digits.
 ///
 /// This is deliberately a post-processing step rather than ASR prompt context:
 /// context can bias the model, but it cannot guarantee that "twenty four" is
-/// inserted as `24`. Only whitespace- or hyphen-separated number phrases are
-/// considered, so ordinary words and punctuation are left alone.
+/// inserted as `24`. English digit sequences and structured quantities are
+/// converted, while isolated small-number words stay natural in prose. Chinese
+/// digit sequences and quantities with explicit units are handled separately.
 enum SpokenNumberNormalizer {
     private enum Word {
         case digit(Int)
@@ -45,9 +47,43 @@ enum SpokenNumberNormalizer {
         "point": .point, "and": .and, "minus": .minus, "negative": .minus
     ]
 
+    private static let chineseDigits: [Character: Int64] = [
+        "零": 0, "〇": 0,
+        "一": 1, "壹": 1, "幺": 1,
+        "二": 2, "两": 2, "兩": 2, "贰": 2, "貳": 2,
+        "三": 3, "叁": 3, "參": 3,
+        "四": 4, "肆": 4,
+        "五": 5, "伍": 5,
+        "六": 6, "陆": 6, "陸": 6,
+        "七": 7, "柒": 7,
+        "八": 8, "捌": 8,
+        "九": 9, "玖": 9,
+    ]
+
+    private static let chineseSmallUnits: [Character: Int64] = [
+        "十": 10, "拾": 10,
+        "百": 100, "佰": 100,
+        "千": 1_000, "仟": 1_000,
+    ]
+
+    private static let chineseLargeUnits: [Character: Int64] = [
+        "万": 10_000, "萬": 10_000,
+        "亿": 100_000_000, "億": 100_000_000,
+    ]
+
+    private static let chinesePoints: Set<Character> = ["点", "點"]
+    private static let chineseMinuses: Set<Character> = ["负", "負"]
+
+    private static let chineseNumberCharacters: Set<Character> = {
+        Set(chineseDigits.keys)
+            .union(chineseSmallUnits.keys)
+            .union(chineseLargeUnits.keys)
+            .union(chinesePoints)
+            .union(chineseMinuses)
+    }()
+
     static func normalize(_ text: String) -> String {
         let tokens = tokenize(text)
-        guard !tokens.isEmpty else { return text }
 
         var replacements: [(Range<String.Index>, String)] = []
         var start = 0
@@ -67,7 +103,7 @@ enum SpokenNumberNormalizer {
             }
 
             let words = tokens[start..<end].compactMap(\.word)
-            if let number = parse(words) {
+            if shouldNormalizeEnglish(words), let number = parse(words) {
                 replacements.append((
                     tokens[start].range.lowerBound..<tokens[end - 1].range.upperBound,
                     number
@@ -80,7 +116,150 @@ enum SpokenNumberNormalizer {
         for (range, replacement) in replacements.reversed() {
             result.replaceSubrange(range, with: replacement)
         }
+        return normalizeChinese(in: result)
+    }
+
+    /// A single word such as "one" is usually prose, not an identifier. Runs
+    /// ("one three five") and structured quantities ("twenty four", "one
+    /// hundred") remain unambiguous enough to normalize.
+    private static func shouldNormalizeEnglish(_ words: [Word]) -> Bool {
+        guard words.count == 1 else { return true }
+        return !words[0].isDigit
+    }
+
+    private static func normalizeChinese(in text: String) -> String {
+        var replacements: [(Range<String.Index>, String)] = []
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            guard chineseNumberCharacters.contains(text[index]) else {
+                index = text.index(after: index)
+                continue
+            }
+
+            let start = index
+            repeat {
+                index = text.index(after: index)
+            } while index < text.endIndex && chineseNumberCharacters.contains(text[index])
+
+            let range = start..<index
+            if let number = normalizeChineseRun(text[range]) {
+                replacements.append((range, number))
+            }
+        }
+
+        var result = text
+        for (range, replacement) in replacements.reversed() {
+            result.replaceSubrange(range, with: replacement)
+        }
         return result
+    }
+
+    private static func normalizeChineseRun(_ run: Substring) -> String? {
+        var characters = Array(run)
+        guard !characters.isEmpty else { return nil }
+
+        var negative = false
+        if let first = characters.first, chineseMinuses.contains(first) {
+            negative = true
+            characters.removeFirst()
+        }
+        guard !characters.isEmpty,
+              !characters.contains(where: chineseMinuses.contains) else { return nil }
+
+        let points = characters.indices.filter { chinesePoints.contains(characters[$0]) }
+        guard points.count <= 1 else { return nil }
+
+        let integerCharacters: ArraySlice<Character>
+        let fractionCharacters: ArraySlice<Character>
+        if let point = points.first {
+            guard point > characters.startIndex, point + 1 < characters.endIndex else { return nil }
+            integerCharacters = characters[..<point]
+            fractionCharacters = characters[(point + 1)...]
+            guard fractionCharacters.allSatisfy({ chineseDigits[$0] != nil }) else { return nil }
+        } else {
+            integerCharacters = characters[...]
+            fractionCharacters = []
+        }
+
+        let containsUnit = integerCharacters.contains {
+            chineseSmallUnits[$0] != nil || chineseLargeUnits[$0] != nil
+        }
+        let integer: String
+        if containsUnit {
+            // Requiring an explicit digit avoids rewriting lexical uses of
+            // unit-only forms such as "千万不要".
+            guard integerCharacters.contains(where: { chineseDigits[$0] != nil }),
+                  let value = parseChineseInteger(integerCharacters) else { return nil }
+            integer = String(value)
+        } else {
+            let digits = integerCharacters.compactMap { chineseDigits[$0] }
+            // Preserve an isolated 一/二/etc. in ordinary Chinese prose, just
+            // as isolated English small-number words are preserved.
+            guard digits.count == integerCharacters.count,
+                  digits.count >= 2 || !fractionCharacters.isEmpty || negative else { return nil }
+            integer = digits.map(String.init).joined()
+        }
+
+        var result = (negative ? "-" : "") + integer
+        if !fractionCharacters.isEmpty {
+            result += "." + fractionCharacters.compactMap { chineseDigits[$0] }.map(String.init).joined()
+        }
+        return result
+    }
+
+    private static func parseChineseInteger(_ characters: ArraySlice<Character>) -> Int64? {
+        var total: Int64 = 0
+        var section: Int64 = 0
+        var pendingDigit: Int64?
+
+        for character in characters {
+            if let digit = chineseDigits[character] {
+                // Consecutive digits belong to the digit-sequence form, not a
+                // unit-based quantity. Zero may bridge units (一百零五), but
+                // reject other mixed ambiguous forms.
+                if let pendingDigit {
+                    guard pendingDigit == 0 else { return nil }
+                }
+                pendingDigit = digit
+                continue
+            }
+
+            if let unit = chineseSmallUnits[character] {
+                let multiplier = pendingDigit ?? 1
+                guard let contribution = safeMultiply(multiplier, unit),
+                      let nextSection = safeAdd(section, contribution) else { return nil }
+                section = nextSection
+                pendingDigit = nil
+                continue
+            }
+
+            if let unit = chineseLargeUnits[character] {
+                guard let withPending = safeAdd(section, pendingDigit ?? 0) else { return nil }
+                let group = max(withPending, 1)
+                guard let contribution = safeMultiply(group, unit),
+                      let nextTotal = safeAdd(total, contribution) else { return nil }
+                total = nextTotal
+                section = 0
+                pendingDigit = nil
+                continue
+            }
+
+            return nil
+        }
+
+        guard let withPending = safeAdd(section, pendingDigit ?? 0) else { return nil }
+        return safeAdd(total, withPending)
+    }
+
+    private static func safeAdd(_ lhs: Int64, _ rhs: Int64) -> Int64? {
+        let (result, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? nil : result
+    }
+
+    private static func safeMultiply(_ lhs: Int64, _ rhs: Int64) -> Int64? {
+        let (result, overflow) = lhs.multipliedReportingOverflow(by: rhs)
+        return overflow ? nil : result
     }
 
     private static func tokenize(_ text: String) -> [Token] {

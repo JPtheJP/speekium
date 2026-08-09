@@ -24,7 +24,7 @@ struct OnboardingView: View {
     var onFinish: () -> Void
 
     enum Step: Int, CaseIterable {
-        case welcome, runtime, model, microphone, accessibility, preferences, output, voiceShortcut, ready
+        case welcome, runtime, model, microphone, accessibility, preferences, oneWordLanguage, output, voiceShortcut, ready
     }
 
     var body: some View {
@@ -39,6 +39,7 @@ struct OnboardingView: View {
                 case .microphone: microphoneStep
                 case .accessibility: accessibilityStep
                 case .preferences: preferencesStep
+                case .oneWordLanguage: oneWordLanguageStep
                 case .output: outputStep
                 case .voiceShortcut: voiceShortcutStep
                 case .ready: readyStep
@@ -362,6 +363,74 @@ struct OnboardingView: View {
                 ModePicker(settings: settings)
                 KeyPicker(settings: settings)
             }
+        }
+        // Animate the page as one layer so the Picker and selection cards do
+        // not mount or fade independently during the onboarding transition.
+        .compositingGroup()
+    }
+
+    private var oneWordLanguageStep: some View {
+        StepLayout(
+            icon: "character.bubble",
+            title: "One-word dictation language",
+            blurb: "Choose one language for very short clips. Normal dictation will continue to detect languages automatically."
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 14) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 24)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Normal dictation")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Sentences and longer clips")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Text("Automatic")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+
+                Divider().padding(.leading, 54)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "text.cursor")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                            .frame(width: 24)
+
+                        Text("One-word dictation")
+                            .font(.system(size: 14, weight: .medium))
+
+                        Spacer()
+
+                        Picker("Language", selection: $settings.shortUtteranceLanguage) {
+                            ForEach(ShortUtteranceLanguage.allCases) { language in
+                                Text(language.modelName).tag(language)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 170)
+                    }
+
+                    Text("Mainly used when you dictate a single isolated word. Clips up to two seconds need an expected language because automatic detection has too little context.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 38)
+                }
+                .padding(16)
+            }
+            .onboardingSurface()
+            .frame(width: 430)
         }
     }
 
