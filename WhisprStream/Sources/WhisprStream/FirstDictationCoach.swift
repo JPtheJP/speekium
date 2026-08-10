@@ -105,10 +105,14 @@ struct FirstDictationCoachView: View {
         .padding(.vertical, 14)
         .background {
             RoundedRectangle(cornerRadius: 19, style: .continuous)
-                .fill(.ultraThinMaterial)
+                // A translucent material can sample a bright webpage while
+                // SwiftUI still supplies dark-mode (white) text, leaving the
+                // coach almost unreadable. An opaque semantic surface keeps
+                // text and background in the same appearance on every app.
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.98))
                 .overlay {
                     RoundedRectangle(cornerRadius: 19, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.7)
+                        .strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.8)
                 }
         }
         .compositingGroup()

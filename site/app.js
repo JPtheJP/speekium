@@ -48,41 +48,109 @@ document.querySelectorAll('.reveal').forEach(el => {
 /* ============================================================
    2. SVG line drawing.
 
-   With vector-effect:non-scaling-stroke the dash pattern is measured in
-   SCREEN space, not user units — so a dasharray of getTotalLength() stops
-   the line short by exactly the viewBox scale factor. Scale it, and drop
-   the dash once drawn so a later resize can never re-clip the path.
+   Normalise every SVG geometry to a path length of 1. That keeps the hidden
+   and completed states exact at every viewport size; screen pixels are used
+   only to choose a natural duration. The Web Animations API owns the timeline,
+   so Chrome cannot transition the setup state or strand an in-between frame.
    ============================================================ */
-function arm(el) {
-  const scale = el.getScreenCTM()?.a || 1;
-  const len = el.getTotalLength() * scale;
-  el.style.strokeDasharray = len;
-  el.style.strokeDashoffset = len;
-  return len;
-}
-function release(el, afterMs) {
-  el.style.strokeDashoffset = 0;
-  setTimeout(() => {
-    el.style.strokeDasharray = 'none';
-    el.style.strokeDashoffset = '';
-  }, afterMs);
+function armStroke(el) {
+  const ctm = el.getScreenCTM();
+  const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 1;
+  const screenLength = el.getTotalLength() * scale;
+
+  el.setAttribute('pathLength', '1');
+  el.style.strokeDasharray = '0 1';
+  el.style.strokeDashoffset = '0';
+  el._drawLength = screenLength;
 }
 
-const glyphs = [...document.querySelectorAll('.draw svg > *')];
-glyphs.forEach((el, i) => { arm(el); el.style.setProperty('--i', i % 4); });
+function finishStroke(el) {
+  el.style.strokeDasharray = 'none';
+  el.style.strokeDashoffset = '';
+}
+
+const drawings = [...document.querySelectorAll('.draw')];
+const DRAW_SPEED = 320; // screen pixels per second
+const DRAW_MIN_DURATION = 900;
+const DRAW_MAX_DURATION = 1450;
+const DRAW_LEAD_IN = 160;
+const DRAW_EASING = 'cubic-bezier(.33, 0, .2, 1)';
+
+drawings.forEach(draw => {
+  draw.querySelectorAll('svg > *').forEach(armStroke);
+});
+
+function finishDrawing(draw) {
+  draw._drawAnimations?.forEach(animation => animation.cancel());
+  draw._drawAnimations = [];
+  draw._drawn = true;
+  draw.querySelectorAll('svg > *').forEach(finishStroke);
+}
+
+function startDrawing(draw) {
+  if (draw._drawn) return;
+
+  const strokes = [...draw.querySelectorAll('svg > *')];
+  if (!strokes.length || typeof strokes[0].animate !== 'function') {
+    finishDrawing(draw);
+    return;
+  }
+
+  // Draw an icon like one pen: finish its main contour, then add each detail.
+  // Durations follow physical line length, so a short hand or dot never crawls
+  // for as long as the outer shape and reads as a frozen fragment.
+  const totalLength = strokes.reduce((sum, stroke) => sum + stroke._drawLength, 0);
+  const totalDuration = Math.min(
+    DRAW_MAX_DURATION,
+    Math.max(DRAW_MIN_DURATION, totalLength / DRAW_SPEED * 1000)
+  );
+
+  let cursor = DRAW_LEAD_IN;
+  const animations = strokes.map(stroke => {
+    const duration = Math.max(70, totalDuration * stroke._drawLength / totalLength);
+    const animation = stroke.animate(
+      [
+        { strokeDasharray: '0 1' },
+        { strokeDasharray: '1 0' },
+      ],
+      {
+        duration,
+        delay: cursor,
+        easing: DRAW_EASING,
+        fill: 'forwards',
+      }
+    );
+    cursor += duration;
+    return animation;
+  });
+
+  draw._drawn = true;
+  draw._drawAnimations = animations;
+  animations.at(-1).finished.then(() => {
+    if (draw._drawAnimations === animations) finishDrawing(draw);
+  }).catch(() => { /* finishDrawing intentionally cancels on page hide */ });
+}
 
 const drawIO = new IntersectionObserver((es) => {
   for (const e of es) {
     if (!e.isIntersecting) continue;
-    e.target.querySelectorAll('svg > *').forEach((s, i) => release(s, 2000 + i * 130));
+    startDrawing(e.target);
     drawIO.unobserve(e.target);
   }
 }, { threshold: .45 });
 
-document.querySelectorAll('.draw').forEach(el => {
-  if (document.hidden) el.querySelectorAll('svg > *').forEach(s => release(s, 0));
+drawings.forEach(el => {
+  if (REDUCED || document.hidden) finishDrawing(el);
   else drawIO.observe(el);
 });
+
+// Chrome suspends animation timelines when a tab is backgrounded. Resolve the
+// drawing explicitly before that can strand a glyph at an interpolated dash.
+// pagehide also covers the back/forward cache path, where visibilitychange is
+// not guaranteed to fire first.
+const finishDrawings = () => drawings.forEach(finishDrawing);
+onHide.push(finishDrawings);
+addEventListener('pagehide', finishDrawings);
 
 /* ============================================================
    2b. Copy-to-clipboard for the install command.

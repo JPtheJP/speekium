@@ -373,7 +373,7 @@ struct OnboardingView: View {
         StepLayout(
             icon: "character.bubble",
             title: "One-word dictation language",
-            blurb: "Smart mode switches between English and Chinese using your writing context. Normal dictation continues to detect languages automatically."
+            blurb: "Choose how very short, one-word clips are recognized. Normal dictation continues to detect languages automatically."
         ) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 14) {
