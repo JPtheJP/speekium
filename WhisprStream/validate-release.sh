@@ -16,7 +16,7 @@ if [ -d "$APP" ]; then
     APP_DIR="$APP"
 else
     unzip -q "$APP" -d "$VALIDATION_TMP/app"
-    APP_DIR="$(find "$VALIDATION_TMP/app" -maxdepth 2 -type d -name 'WhisprStream.app' -print -quit)"
+    APP_DIR="$(find "$VALIDATION_TMP/app" -maxdepth 2 -type d -name __MACOSX -prune -o -type d -name 'WhisprStream.app' -print -quit)"
     [ -n "$APP_DIR" ] || { echo "error: app archive has no WhisprStream.app" >&2; exit 1; }
 fi
 
