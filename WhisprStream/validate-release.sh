@@ -23,6 +23,10 @@ fi
 BIN="$APP_DIR/Contents/MacOS/WhisprStream"
 [ -x "$BIN" ] || { echo "error: app executable is missing" >&2; exit 1; }
 file "$BIN" | grep -q 'arm64' || { echo "error: app is not arm64" >&2; exit 1; }
+if rg -a -q '(/Users/|/home/)' "$BIN"; then
+    echo "error: app executable contains a build-machine home path" >&2
+    exit 1
+fi
 codesign --verify --strict --deep "$APP_DIR"
 
 plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP_DIR/Contents/Info.plist" 2>/dev/null; }

@@ -58,7 +58,18 @@ else
 fi
 
 echo "▸ compiling"
-swift build -c release
+if [ "$RELEASE" = "1" ]; then
+    # Swift embeds source and object-file paths in optimized executables. Map
+    # the repository root to a stable synthetic path so public artifacts never
+    # disclose the builder's user name or local directory layout.
+    swift build -c release \
+        -Xswiftc -file-prefix-map \
+        -Xswiftc "$PROJECT_ROOT=/src" \
+        -Xcc "-fdebug-prefix-map=$PROJECT_ROOT=/src" \
+        -Xcc "-ffile-prefix-map=$PROJECT_ROOT=/src"
+else
+    swift build -c release
+fi
 
 BIN=".build/release/WhisprStream"
 [ -x "$BIN" ] || { echo "error: build produced no binary" >&2; exit 1; }
@@ -71,6 +82,16 @@ cp "$BIN" "$APP/Contents/MacOS/WhisprStream"
 cp Resources/asr_server.py "$APP/Contents/Resources/"
 cp Resources/model_download.py "$APP/Contents/Resources/"
 cp "$PROJECT_ROOT/asr_engine.py" "$APP/Contents/Resources/"
+
+if [ "$RELEASE" = "1" ]; then
+    # The linker records absolute object-file paths as N_OSO debug symbols;
+    # remove those records after source paths have been remapped above.
+    strip -S "$APP/Contents/MacOS/WhisprStream"
+    if rg -a -q '(/Users/|/home/)' "$APP/Contents/MacOS/WhisprStream"; then
+        echo "error: release executable contains a build-machine home path" >&2
+        exit 1
+    fi
+fi
 
 # Designed start/finish sounds. Regenerate with sound-design/render_sounds.py.
 if [ -d Resources/Sounds ]; then

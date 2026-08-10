@@ -33,7 +33,7 @@ RUNTIME_INSTALLED_BYTES="<installed-bytes>" \
 WhisprStream/build.sh
 ```
 
-`RELEASE=1` fails if any runtime value is missing, malformed, zero, non-HTTPS, or if the bundle identifier is not `com.leoleo.whisprstream`. It also fails without a signing identity; it never silently falls back to ad-hoc signing.
+`RELEASE=1` fails if any runtime value is missing, malformed, zero, non-HTTPS, or if the bundle identifier is not `com.leoleo.whisprstream`. It also fails without a signing identity; it never silently falls back to ad-hoc signing. Release compilation remaps the repository root to `/src`, strips linker-generated `N_OSO` debug records, and both the builder and validator reject executables containing `/Users/` or `/home/` build-machine paths.
 
 Archive the app with macOS metadata preserved:
 
