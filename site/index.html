@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&amp;display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20260808-1">
+<link rel="stylesheet" href="style.css?v=20260808-3">
 </head>
 <body>
 
@@ -45,8 +45,6 @@
       </a>
     </div>
 
-    <p class="fineprint rise" style="--i:4">Small app download · engine and chosen speech model install during Setup Guide · approximately 3 GB free space recommended</p>
-    <p class="fineprint rise" style="--i:5">macOS 14+ · Apple silicon · self-signed, not notarized. If macOS blocks the first launch, use Open Anyway in System Settings → Privacy &amp; Security. <a href="https://github.com/Leo6Leo/whispr-stream/blob/master/INSTALL.md">Installation instructions</a>.</p>
   </div>
 
   <!-- The product in context: WhisprStream floats over whatever Mac app owns
@@ -68,7 +66,6 @@
         <div class="app-scene scene-terminal">
           <p><b>~</b> local-agent</p>
           <p class="terminal-dim">Ready. Describe what you want to do.</p>
-          <p><b>›</b></p>
         </div>
 
         <div class="app-scene scene-chat">
@@ -106,9 +103,8 @@
       <i aria-hidden="true"></i>
       <span>Text lands at the cursor</span>
     </div>
+    <div class="cue rise" style="--i:7"><i></i> Scroll</div>
   </div>
-
-  <div class="wrap"><div class="cue rise" style="--i:7"><i></i> Scroll</div></div>
 </section>
 
 <!-- ============ PRINCIPLES ============ -->
@@ -171,39 +167,31 @@
 <!-- ============ INSTALLATION ============ -->
 <section class="reveal install-section" id="install">
   <div class="wrap">
-    <p class="eyebrow rise" style="--i:0">Install without a toolchain</p>
-    <h2 class="h2 rise" style="--i:1;margin-top:24px">Download the app.<br>Set up the engine inside it.</h2>
-    <p class="feature-copy rise" style="--i:2">WhisprStream keeps the native app, private speech engine, and speech model separate. You download only what you need, and app updates do not make you fetch the large files again.</p>
+    <p class="eyebrow rise" style="--i:0">Install</p>
+    <h2 class="h2 rise" style="--i:1;margin-top:24px">Small app.<br>Guided setup.</h2>
+    <p class="feature-copy rise" style="--i:2">Setup Guide installs the private engine and the model you choose. No Python or Terminal.</p>
 
     <div class="install-flow">
       <article class="install-step rise" style="--i:1">
         <span class="step-number">01</span>
-        <h3>Get the Mac app</h3>
-        <p>From the latest published release, download <code>WhisprStream-macos-arm64.zip</code>, extract it, and move the app to Applications.</p>
+        <h3>Download</h3>
+        <p>Get the app ZIP from Releases and move WhisprStream to Applications.</p>
       </article>
       <article class="install-step rise" style="--i:2">
         <span class="step-number">02</span>
-        <h3>Open it safely</h3>
-        <p>The app is self-signed but not notarized. If macOS blocks it, use <strong>Open Anyway</strong> in Privacy &amp; Security—never disable Gatekeeper.</p>
+        <h3>Open</h3>
+        <p>Open WhisprStream from Applications.</p>
       </article>
       <article class="install-step rise" style="--i:3">
         <span class="step-number">03</span>
-        <h3>Install the engine</h3>
-        <p>Setup Guide checks free space, downloads the private engine, verifies it, and runs a health check. No Python, Homebrew, Xcode, or Terminal.</p>
-      </article>
-      <article class="install-step rise" style="--i:4">
-        <span class="step-number">04</span>
-        <h3>Choose a model</h3>
-        <p>Use the recommended 0.6B model at about 1.9 GB, or choose the 4.3 GB 1.7B model on a Mac with 16 GB or more unified memory.</p>
+        <h3>Set up</h3>
+        <p>Install the verified engine, choose a model, and grant permissions.</p>
       </article>
     </div>
 
-    <div class="install-note rise" style="--i:5">
-      <div>
-        <strong>Interrupted download?</strong>
-        <span>Settings → Model shows the exact partial storage. Clear Partial Data removes only unfinished files for that model, and cancelled downloads cannot leave a permanent lock behind.</span>
-      </div>
-      <a href="https://github.com/Leo6Leo/whispr-stream/blob/master/INSTALL.md">Read the complete installation guide →</a>
+    <div class="install-foot rise" style="--i:4">
+      <span>Interrupted? Settings → Model → Clear Partial Data.</span>
+      <a href="https://github.com/Leo6Leo/whispr-stream/blob/master/INSTALL.md">Full guide →</a>
     </div>
   </div>
 </section>

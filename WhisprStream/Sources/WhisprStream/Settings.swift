@@ -79,6 +79,7 @@ enum ActivationMode: String, CaseIterable, Identifiable {
 /// Language guidance for clips too short to provide reliable language context.
 /// Longer utterances always keep automatic multilingual recognition.
 enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
+    case smartEnglishChinese
     case chinese, english, cantonese, arabic, german, french, spanish
     case portuguese, indonesian, italian, korean, russian, thai, vietnamese
     case japanese, turkish, hindi, malay, dutch, swedish, danish, finnish
@@ -86,9 +87,11 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// Canonical names accepted by Qwen3-ASR's forced-language prompt.
+    /// User-facing picker labels. Fixed choices also match Qwen3-ASR's
+    /// canonical forced-language names.
     var modelName: String {
         switch self {
+        case .smartEnglishChinese: return "Smart English + Chinese"
         case .chinese: return "Chinese"
         case .english: return "English"
         case .cantonese: return "Cantonese"
@@ -121,6 +124,12 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
         case .romanian: return "Romanian"
         }
     }
+
+    /// A fixed Qwen language name, or nil when the app should select a hint
+    /// from the active writing context for this individual utterance.
+    var fixedModelLanguage: String? {
+        self == .smartEnglishChinese ? nil : modelName
+    }
 }
 
 /// User preferences, persisted to UserDefaults.
@@ -151,6 +160,18 @@ final class Settings: ObservableObject {
     /// not run into the previous one.
     @Published var usePunctuation: Bool {
         didSet { defaults.set(usePunctuation, forKey: Keys.usePunctuation) }
+    }
+
+    /// Match the transcript's opening capitalization to text at the active
+    /// cursor. Apps without readable cursor context require a brief reversible
+    /// keyboard probe, so users can disable this when minimum latency matters.
+    @Published var contextAwareCapitalization: Bool {
+        didSet {
+            defaults.set(
+                contextAwareCapitalization,
+                forKey: Keys.contextAwareCapitalization
+            )
+        }
     }
 
     /// A user-selected tie-breaker for context-poor, very short recordings.
@@ -345,6 +366,7 @@ final class Settings: ObservableObject {
         static let autoInsert = "autoInsert"
         static let copyToClipboard = "copyToClipboard"
         static let usePunctuation = "usePunctuation"
+        static let contextAwareCapitalization = "contextAwareCapitalization"
         static let shortUtteranceLanguage = "shortUtteranceLanguage"
         static let playSound = "playSound"
         static let insertSound = "insertSound"   // pre-pairs; read once to migrate
@@ -365,9 +387,12 @@ final class Settings: ObservableObject {
         autoInsert = defaults.object(forKey: Keys.autoInsert) as? Bool ?? true
         copyToClipboard = defaults.object(forKey: Keys.copyToClipboard) as? Bool ?? true
         usePunctuation = defaults.object(forKey: Keys.usePunctuation) as? Bool ?? true
+        contextAwareCapitalization = defaults.object(
+            forKey: Keys.contextAwareCapitalization
+        ) as? Bool ?? true
         shortUtteranceLanguage = ShortUtteranceLanguage(
             rawValue: defaults.string(forKey: Keys.shortUtteranceLanguage) ?? ""
-        ) ?? .english
+        ) ?? .smartEnglishChinese
         playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? false
         // Migration: before pairs, the choice lived in `insertSound` as a bare
         // alert-sound name. Carry it over so an existing setting is preserved

@@ -32,6 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var speechEngineGeneration = 0
     private var speechEngineStartedAt: TimeInterval?
     private var speechEngineStartupWork: DispatchWorkItem?
+    private var shouldShowFirstDictationCoach = false
+    private var precedingTextAtDictationStart: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = HUDPanel(state: state)
@@ -81,6 +83,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOnboarding() {
+        let shouldOfferFirstDictationCoach = FirstDictationCoachPolicy.shouldOffer(
+            hasCompletedOnboarding: settings.hasCompletedOnboarding,
+            isDeveloperFirstRunSimulation: DeveloperTestMode.isEnabled
+        )
         windows.showOnboarding(
             settings: settings,
             runtime: runtime,
@@ -89,7 +95,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.settings.hasCompletedOnboarding = true
             self.startSpeechEngine()
+            if shouldOfferFirstDictationCoach,
+               AXIsProcessTrusted(),
+               AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
+                self.shouldShowFirstDictationCoach = true
+                self.presentFirstDictationCoachIfReady()
+            }
         }
+    }
+
+    private func presentFirstDictationCoachIfReady() {
+        guard shouldShowFirstDictationCoach, isASRReady else { return }
+        shouldShowFirstDictationCoach = false
+        windows.showFirstDictationCoach(
+            key: settings.triggerKey,
+            mode: settings.activationMode
+        )
     }
 
     private func startSpeechEngine() {
@@ -105,7 +126,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hotkey = HotKeyMonitor(key: settings.triggerKey, mode: settings.activationMode)
-        hotkey.onStart = { [weak self] in self?.beginDictation() }
+        hotkey.onStart = { [weak self] in
+            guard let self else { return }
+            self.shouldShowFirstDictationCoach = false
+            self.windows.dismissFirstDictationCoach()
+            self.beginDictation()
+        }
         hotkey.onStop = { [weak self] in self?.endDictation() }
         hotkey.start()
 
@@ -289,13 +315,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard state.phase != .listening else { return }
         dismissWork?.cancel()
+        precedingTextAtDictationStart = settings.autoInsert
+            && (settings.contextAwareCapitalization
+                || settings.shortUtteranceLanguage == .smartEnglishChinese)
+            ? TextInserter.textBeforeCursor()
+            : nil
         state.reset()
         state.phase = .listening
         state.startDictationTimer()
         panel.present()
 
         settings.playStart()
-        asr.beginUtterance()
+        let shortLanguage = ShortUtteranceLanguageResolver.modelLanguage(
+            for: settings.shortUtteranceLanguage,
+            precedingText: precedingTextAtDictationStart
+        )
+        asr.beginUtterance(shortUtteranceLanguage: shortLanguage)
         do { try capture.start() } catch {
             state.stopDictationTimer()
             state.phase = .failed("Microphone unavailable")
@@ -324,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             speechEngineStartedAt = nil
             isASRReady = true
             settings.isReloadingModel = false
+            presentFirstDictationCoachIfReady()
             if state.phase == .loading {
                 if panel.isVisible {
                     dismissNow()
@@ -339,6 +375,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state.tail = tail
 
         case let .final(text, secs, ms):
+            let startingPrecedingText = precedingTextAtDictationStart
+            precedingTextAtDictationStart = nil
             state.lastAudioSecs = secs
             state.lastDurationMS = ms
             guard !text.isEmpty else {
@@ -358,31 +396,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // Shortcut replacements are user-authored literal output; preserve
             // their casing even when they are inserted mid-sentence.
-            let deliveredText = settings.autoInsert && expansion.matchedShortcutID == nil
-                ? TranscriptFormatter.adjustedForCursor(
+            if settings.autoInsert,
+               settings.contextAwareCapitalization,
+               expansion.matchedShortcutID == nil {
+                TextInserter.resolveTextBeforeCursor(fallback: startingPrecedingText) {
+                    [weak self] precedingText in
+                    self?.deliverFinalTranscript(
+                        expansion.text,
+                        precedingText: precedingText,
+                        adjustForCursor: true
+                    )
+                }
+            } else {
+                deliverFinalTranscript(
                     expansion.text,
-                    precedingText: TextInserter.textBeforeCursor()
+                    precedingText: nil,
+                    adjustForCursor: false
                 )
-                : expansion.text
-            guard !deliveredText.isEmpty else {
-                dismissNow()
-                return
             }
-            let insertionText = TranscriptFormatter.textForInsertion(deliveredText)
-            state.committed = deliveredText
-            state.tail = ""
-            state.phase = .inserted
-
-            TextInserter.deliver(
-                deliveredText,
-                insertionText: insertionText,
-                insertAtCursor: settings.autoInsert,
-                copyToClipboard: settings.copyToClipboard
-            )
-            settings.playFeedback()
-            scheduleDismiss(after: 0.42)
 
         case let .error(message):
+            precedingTextAtDictationStart = nil
             if !isASRReady {
                 speechEngineStartupWork?.cancel()
                 speechEngineStartupWork = nil
@@ -399,6 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleDismiss(after: 1.8)
 
         case let .terminated(message):
+            precedingTextAtDictationStart = nil
             speechEngineStartupWork?.cancel()
             speechEngineStartupWork = nil
             speechEngineStartedAt = nil
@@ -411,6 +446,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshStatusMenu()
             scheduleDismiss(after: 1.8)
         }
+    }
+
+    private func deliverFinalTranscript(
+        _ text: String,
+        precedingText: String?,
+        adjustForCursor: Bool
+    ) {
+        let deliveredText = adjustForCursor
+            ? TranscriptFormatter.adjustedForCursor(text, precedingText: precedingText)
+            : text
+        guard !deliveredText.isEmpty else {
+            dismissNow()
+            return
+        }
+        let insertionText = TranscriptFormatter.textForInsertion(deliveredText)
+        state.committed = deliveredText
+        state.tail = ""
+        state.phase = .inserted
+
+        TextInserter.deliver(
+            deliveredText,
+            insertionText: insertionText,
+            insertAtCursor: settings.autoInsert,
+            copyToClipboard: settings.copyToClipboard
+        )
+        settings.playFeedback()
+        scheduleDismiss(after: 0.42)
     }
 
     private func scheduleDismiss(after delay: TimeInterval) {

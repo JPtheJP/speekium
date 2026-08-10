@@ -187,7 +187,13 @@ final class ASRService {
         return !shutdownRequested
     }
 
-    func beginUtterance() { send(["cmd": "start"]) }
+    func beginUtterance(shortUtteranceLanguage: String?) {
+        var command: [String: Any] = ["cmd": "start"]
+        if let shortUtteranceLanguage {
+            command["short_utterance_language"] = shortUtteranceLanguage
+        }
+        send(command)
+    }
     func stopUtterance() { send(["cmd": "stop"]) }
 
     /// Push edited vocabulary to the resident sidecar. The model is not reloaded,

@@ -211,6 +211,21 @@ private struct GeneralTab: View {
                          ? "Keep sentence-ending punctuation from dictation."
                          : "Remove sentence-ending punctuation from dictation.")
                 }
+
+                Toggle(isOn: $settings.contextAwareCapitalization) {
+                    HStack(spacing: 6) {
+                        Text("Context-aware capitalization")
+                        Text("Beta")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.14), in: Capsule())
+                    }
+                    Text(settings.contextAwareCapitalization
+                         ? "Match nearby text. This may add a brief delay in some apps."
+                         : "Keep the speech model's capitalization without checking the cursor.")
+                }
             }
 
             Section {
@@ -235,7 +250,7 @@ private struct GeneralTab: View {
             } header: {
                 Text("One-word dictation")
             } footer: {
-                Text("Choose one language for clips up to two seconds. This mainly handles isolated words, where automatic language detection has too little context and may return a translation in another language.")
+                Text("Smart English + Chinese follows nearby text and your keyboard language. Fixed choices remain available for clips up to two seconds. Live previews always detect language automatically.")
                     .foregroundStyle(.secondary)
                     .font(.callout)
             }

@@ -1,0 +1,166 @@
+import AppKit
+import SwiftUI
+
+enum FirstDictationCoachPolicy {
+    static func shouldOffer(
+        hasCompletedOnboarding: Bool,
+        isDeveloperFirstRunSimulation: Bool
+    ) -> Bool {
+        !hasCompletedOnboarding || isDeveloperFirstRunSimulation
+    }
+}
+
+/// A short, non-activating invitation shown after first-run onboarding.
+/// It never takes keyboard focus, so the user's first transcript can still be
+/// inserted into whichever app and text field they choose.
+@MainActor
+final class FirstDictationCoachPanel: NSPanel {
+    private static let panelSize = NSSize(width: 600, height: 150)
+    private static let bottomMargin: CGFloat = 90
+
+    init(key: TriggerKey, mode: ActivationMode) {
+        super.init(
+            contentRect: NSRect(origin: .zero, size: Self.panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        isFloatingPanel = true
+        level = .statusBar
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        animationBehavior = .none
+
+        let host = NSHostingView(rootView: FirstDictationCoachView(key: key, mode: mode))
+        host.wantsLayer = true
+        host.layer?.backgroundColor = NSColor.clear.cgColor
+        contentView = host
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    func present() {
+        guard let screen = NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        setFrameOrigin(NSPoint(
+            x: visible.midX - frame.width / 2,
+            y: visible.minY + Self.bottomMargin
+        ))
+
+        alphaValue = 0
+        orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = 1
+        }
+    }
+
+    func dismiss(animated: Bool, completion: (() -> Void)? = nil) {
+        guard animated else {
+            orderOut(nil)
+            completion?()
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            self?.orderOut(nil)
+            completion?()
+        }
+    }
+}
+
+struct FirstDictationCoachView: View {
+    let key: TriggerKey
+    let mode: ActivationMode
+
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 16) {
+            animatedKey
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Try your first dictation")
+                    .font(.system(size: 15.5, weight: .semibold, design: .rounded))
+
+                Text(Self.instruction(key: key, mode: mode))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: 386, alignment: .leading)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background {
+            RoundedRectangle(cornerRadius: 19, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 19, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.7)
+                }
+        }
+        .compositingGroup()
+        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { animating = true }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var animatedKey: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.55), lineWidth: 1.5)
+                .frame(width: 108, height: 60)
+                .scaleEffect(animating ? 1.14 : 0.96)
+                .opacity(animating ? 0 : 0.75)
+
+            Text(Self.keyName(key))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 104, height: 56)
+                .background {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.14))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 1.2)
+                        }
+                }
+                .scaleEffect(animating ? 0.96 : 1)
+        }
+        .frame(width: 118, height: 68)
+        .animation(
+            .easeInOut(duration: 0.82).repeatForever(autoreverses: true),
+            value: animating
+        )
+    }
+
+    static func instruction(key: TriggerKey, mode: ActivationMode) -> String {
+        switch mode {
+        case .hold:
+            return "Click in any text field, then hold \(keyName(key)), speak, and release."
+        case .tap:
+            return "Click in any text field, tap \(keyName(key)), speak, then tap it again."
+        }
+    }
+
+    private static func keyName(_ key: TriggerKey) -> String {
+        key == .function ? "Fn" : "\(key.symbol) \(key.label)"
+    }
+}

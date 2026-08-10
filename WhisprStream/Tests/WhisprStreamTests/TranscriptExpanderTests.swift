@@ -51,6 +51,13 @@ final class TranscriptExpanderTests: XCTestCase {
 
     func testCursorContinuationLowercasesSentenceStyleOpening() {
         XCTAssertEqual(
+            TranscriptFormatter.adjustedForCursor(
+                "Is the deal for you",
+                precedingText: "Hello this "
+            ),
+            "is the deal for you"
+        )
+        XCTAssertEqual(
             TranscriptFormatter.adjustedForCursor("Testing the feature.", precedingText: "I am "),
             "testing the feature."
         )

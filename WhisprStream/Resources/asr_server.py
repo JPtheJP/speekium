@@ -51,6 +51,13 @@ SILENCE_WINDOW_SEC = 0.02
 SILENCE_MAX_WINDOW_RMS = 0.02
 SILENCE_MAX_PEAK = 0.06
 
+# Decoding mere elapsed audio lets a vocabulary prompt hallucinate one of its
+# terms (for example "Claude") from room tone. Require several speech-level
+# frames before the first preview or final pass. Three 20 ms frames reject a
+# key click or isolated bump while adding at most 60 ms before live text starts.
+SPEECH_MIN_WINDOW_RMS = 0.015
+SPEECH_MIN_ACTIVE_WINDOWS = 3
+
 PREVIEW_FULL_SPEED_SEC = 4.0
 PREVIEW_ADAPTIVE_RAMP_SEC = 4.0
 PREVIEW_COOLDOWN_DECODE_RATIO = 2.0
@@ -93,6 +100,18 @@ def is_confident_silence(audio: np.ndarray) -> bool:
         if rms > SILENCE_MAX_WINDOW_RMS:
             return False
     return True
+
+
+def has_speech(audio: np.ndarray) -> bool:
+    """Return True after enough speech-level frames, ignoring room tone/clicks."""
+    window = max(1, int(SILENCE_WINDOW_SEC * SAMPLE_RATE))
+    complete_frames = len(audio) // window
+    if complete_frames < SPEECH_MIN_ACTIVE_WINDOWS:
+        return False
+
+    frames = audio[:complete_frames * window].reshape(complete_frames, window)
+    rms = np.sqrt(np.mean(frames * frames, axis=1))
+    return int(np.count_nonzero(rms >= SPEECH_MIN_WINDOW_RMS)) >= SPEECH_MIN_ACTIVE_WINDOWS
 
 
 def preview_cooldown(
@@ -172,6 +191,7 @@ class Server:
         self.short_utterance_language = normalize_short_utterance_language(
             short_utterance_language
         )
+        self._utterance_short_language = self.short_utterance_language
         self._context_revision = 0
         self.buf = np.zeros(0, dtype=np.float32)
         self.active = False
@@ -189,15 +209,27 @@ class Server:
     # -- transcription -------------------------------------------------
     def _language_for_audio(self, audio: np.ndarray) -> str | None:
         if len(audio) <= int(SHORT_UTTERANCE_MAX_SEC * SAMPLE_RATE):
-            return self.short_utterance_language
+            return self._utterance_short_language
         return None
 
-    def _decode(self, audio: np.ndarray, context: str) -> str:
+    def _decode(
+        self,
+        audio: np.ndarray,
+        context: str,
+        language: str | None = None,
+    ) -> str:
         kw = {"context": context} if context else {}
-        language = self._language_for_audio(audio)
         if language:
             kw["language"] = language
         return (self.session.transcribe(audio, **kw).text or "").strip()
+
+    def _decode_preview(self, audio: np.ndarray, context: str) -> str:
+        """Decode live text without treating a sentence start as one word."""
+        return self._decode(audio, context)
+
+    def _decode_final(self, audio: np.ndarray, context: str) -> str:
+        """Apply short-utterance guidance only after clip length is known."""
+        return self._decode(audio, context, self._language_for_audio(audio))
 
     def _reusable_preview(
         self,
@@ -283,10 +315,14 @@ class Server:
                 time.sleep(POLL_INTERVAL)
                 continue
             last_len = full_len
+            if not has_speech(full_audio):
+                # Context terms are strong decoder hints, so never ask the
+                # model to interpret audio that contains only room tone.
+                continue
             audio, preview_start = preview_audio(full_audio)
             try:
                 decode_started = time.perf_counter()
-                text = self._decode(audio, context)
+                text = self._decode_preview(audio, context)
                 decode_seconds = time.perf_counter() - decode_started
                 stable = text == self._prev
                 agreed = commonprefix(text, self._prev)
@@ -305,7 +341,10 @@ class Server:
                     self._last_preview_len = full_len
                     self._last_preview_start = preview_start
                     self._last_preview_context_revision = context_revision
-                    self._last_preview_language = self._language_for_audio(audio)
+                    # Live previews always use automatic multilingual
+                    # recognition. Only a completed short clip receives the
+                    # user's one-word language guidance.
+                    self._last_preview_language = None
                     self._last_preview_stable = stable
                 if self.active:
                     emit({
@@ -330,7 +369,7 @@ class Server:
                 break
 
     # -- commands ------------------------------------------------------
-    def start(self) -> None:
+    def start(self, short_utterance_language: str | None = None) -> None:
         # A fast final can reach Swift before its superseded preview pass has
         # finished cleaning up. A new start command is already ordered ahead of
         # its audio in the pipe, so wait here instead of rejecting the press:
@@ -349,6 +388,14 @@ class Server:
             self._last_preview_stable = False
         self.committed = ""
         self._prev = ""
+        requested_language = normalize_short_utterance_language(
+            short_utterance_language
+        )
+        self._utterance_short_language = (
+            requested_language
+            if short_utterance_language is not None
+            else self.short_utterance_language
+        )
         self._preview_stop.clear()
         self.active = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -389,6 +436,11 @@ class Server:
             self._join_preview_thread()
             return
 
+        if not has_speech(audio):
+            self._emit_final("", secs, 0, stop_started, "no-speech", 0)
+            self._join_preview_thread()
+            return
+
         # Fastest path: a previously completed preview already contains the
         # whole utterance (or differs only by a short stable silence tail). Emit
         # before waiting for a newer, now-unneeded preview that may be in flight.
@@ -415,7 +467,7 @@ class Server:
 
         inference_started = time.perf_counter()
         try:
-            text = self._decode(audio, context)
+            text = self._decode_final(audio, context)
         except Exception as e:
             emit({"type": "error", "message": f"final: {e}"})
             return
@@ -456,7 +508,7 @@ def main() -> int:
         cmd = msg.get("cmd")
         try:
             if cmd == "start":
-                server.start()
+                server.start(msg.get("short_utterance_language"))
             elif cmd == "audio":
                 server.audio(msg["pcm"])
             elif cmd == "stop":

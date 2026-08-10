@@ -373,7 +373,7 @@ struct OnboardingView: View {
         StepLayout(
             icon: "character.bubble",
             title: "One-word dictation language",
-            blurb: "Choose one language for very short clips. Normal dictation will continue to detect languages automatically."
+            blurb: "Smart mode switches between English and Chinese using your writing context. Normal dictation continues to detect languages automatically."
         ) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 14) {
@@ -421,7 +421,7 @@ struct OnboardingView: View {
                         .frame(width: 170)
                     }
 
-                    Text("Mainly used when you dictate a single isolated word. Clips up to two seconds need an expected language because automatic detection has too little context.")
+                    Text("Mainly used for a single isolated word. Smart mode follows nearby text and your keyboard language; choose a fixed language when you need strict control.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

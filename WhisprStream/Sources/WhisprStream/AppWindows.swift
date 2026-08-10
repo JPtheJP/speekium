@@ -11,6 +11,8 @@ final class AppWindows {
     private var onboarding: NSWindow?
     private var settings: NSWindow?
     private var about: NSWindow?
+    private var firstDictationCoach: FirstDictationCoachPanel?
+    private var firstDictationCoachDismissal: DispatchWorkItem?
 
     // MARK: - Onboarding
 
@@ -37,14 +39,41 @@ final class AppWindows {
             runtime: runtime,
             onPrerequisitesReady: onPrerequisitesReady
         ) { [weak self] in
-            onFinish()
             self?.onboarding?.close()
             self?.onboarding = nil
+            onFinish()
         }
         window.contentView = NSHostingView(rootView: view)
         window.setContentSize(NSSize(width: 580, height: 620))
         onboarding = window
         present(window)
+    }
+
+    // MARK: - First dictation coach
+
+    func showFirstDictationCoach(key: TriggerKey, mode: ActivationMode) {
+        dismissFirstDictationCoach(animated: false)
+
+        let coach = FirstDictationCoachPanel(key: key, mode: mode)
+        firstDictationCoach = coach
+        coach.present()
+
+        let dismissal = DispatchWorkItem { [weak self, weak coach] in
+            guard let self, let coach, self.firstDictationCoach === coach else { return }
+            self.firstDictationCoach = nil
+            self.firstDictationCoachDismissal = nil
+            coach.dismiss(animated: true)
+        }
+        firstDictationCoachDismissal = dismissal
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: dismissal)
+    }
+
+    func dismissFirstDictationCoach(animated: Bool = false) {
+        firstDictationCoachDismissal?.cancel()
+        firstDictationCoachDismissal = nil
+        let coach = firstDictationCoach
+        firstDictationCoach = nil
+        coach?.dismiss(animated: animated)
     }
 
     // MARK: - Settings
