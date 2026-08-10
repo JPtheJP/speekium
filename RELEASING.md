@@ -13,7 +13,7 @@ RUNTIME_VERSION=1.0.0 RELEASE=1 \
 WhisprStream/build-runtime.sh
 ```
 
-The script installs only `requirements-macos-arm64.txt`, runs the import/version health check, checks for build-machine paths, signs Mach-O files, verifies signatures, writes `runtime/manifest.json`, and emits a machine-readable `.metadata.json` file with archive size, installed size, and SHA-256.
+The script installs only `requirements-macos-arm64.txt`, explicitly selects macOS 14 arm64 wheels regardless of the builder's macOS version, runs the import/version health check, rejects Mach-O files with a deployment target above macOS 14, checks for build-machine paths, signs and verifies every Mach-O file, writes `runtime/manifest.json`, and emits a machine-readable `.metadata.json` file with archive size, installed size, and SHA-256.
 
 Create the runtime release asset as `WhisprStream-runtime-1.0.0-arm64.zip` and record its metadata.
 

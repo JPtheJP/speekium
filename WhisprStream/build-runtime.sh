@@ -14,6 +14,7 @@ RUNTIME_VERSION="${RUNTIME_VERSION:-${VERSION:?set RUNTIME_VERSION, e.g. 1.0.0}}
 OUTPUT="${OUTPUT:-$PROJECT_ROOT/WhisprStream-runtime-$RUNTIME_VERSION-arm64.zip}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 DEPENDENCY_SET="${DEPENDENCY_SET:-mlx-qwen3-asr-0.3.5}"
+RUNTIME_MINIMUM_MACOS="${RUNTIME_MINIMUM_MACOS:-14.0}"
 RELEASE="${RELEASE:-1}"
 STAGING="$(mktemp -d "${TMPDIR:-/tmp}/whisprstream-runtime.XXXXXX")"
 RUNTIME="$STAGING/runtime"
@@ -67,7 +68,18 @@ if [ ! -x "$RUNTIME_PYTHON" ]; then
 fi
 
 echo "▸ installing pinned ASR dependencies"
-"$RUNTIME_PYTHON" -m pip install --disable-pip-version-check --no-cache-dir -r "$PROJECT_ROOT/requirements-macos-arm64.txt"
+SITE_PACKAGES="$RUNTIME/lib/python3.12/site-packages"
+"$RUNTIME_PYTHON" -m pip install \
+    --disable-pip-version-check \
+    --no-cache-dir \
+    --platform "macosx_${RUNTIME_MINIMUM_MACOS/./_}_arm64" \
+    --implementation cp \
+    --python-version 3.12 \
+    --abi cp312 \
+    --only-binary=:all: \
+    --upgrade \
+    --target "$SITE_PACKAGES" \
+    -r "$PROJECT_ROOT/requirements-macos-arm64.txt"
 
 # The release is code-signed after this script runs. Removing bytecode caches
 # and pip's cache makes the archive smaller without removing runtime content.
@@ -85,7 +97,7 @@ cat > "$RUNTIME/manifest.json" <<MANIFEST
   "runtimeVersion": "$RUNTIME_VERSION",
   "pythonVersion": "$($RUNTIME_PYTHON -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')",
   "architecture": "arm64",
-  "minimumMacOS": "14.0",
+  "minimumMacOS": "$RUNTIME_MINIMUM_MACOS",
   "dependencySet": "$DEPENDENCY_SET",
   "payloadBytes": $INSTALLED_BYTES,
   "dependencyVersions": {
@@ -106,6 +118,19 @@ for SOURCE_PATH in "$SOURCE_PREFIX" "$PROJECT_ROOT"; do
         exit 1
     fi
 done
+
+version_at_most() {
+    [ "$1" = "$2" ] || [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$2" ]
+}
+
+echo "▸ validating Mach-O deployment targets"
+while IFS= read -r FILE; do
+    MINIMUM_OS="$(vtool -show-build "$FILE" 2>/dev/null | awk '/minos/ {print $2; exit}')"
+    if [ -z "$MINIMUM_OS" ] || ! version_at_most "$MINIMUM_OS" "$RUNTIME_MINIMUM_MACOS"; then
+        echo "error: $FILE requires macOS ${MINIMUM_OS:-unknown}, above runtime minimum $RUNTIME_MINIMUM_MACOS" >&2
+        exit 1
+    fi
+done < <(find "$RUNTIME" -type f -print0 | xargs -0 file | awk -F: '/Mach-O/ {print $1}')
 
 if [ "$RELEASE" = "1" ]; then
     echo "▸ signing Mach-O runtime files"
@@ -133,7 +158,12 @@ PY
 echo "▸ creating $(basename "$OUTPUT")"
 mkdir -p "$(dirname "$OUTPUT")"
 rm -f "$OUTPUT"
-(cd "$STAGING" && ditto -c -k runtime "$OUTPUT")
+(cd "$STAGING" && ditto -c -k --keepParent runtime "$OUTPUT")
+ARCHIVE_TOP_LEVEL="$(zipinfo -1 "$OUTPUT" | awk -F/ 'NF {print $1}' | sort -u)"
+if [ "$ARCHIVE_TOP_LEVEL" != "runtime" ]; then
+    echo "error: runtime archive must contain exactly one top-level runtime directory" >&2
+    exit 1
+fi
 ARCHIVE_BYTES="$(stat -f%z "$OUTPUT")"
 ARCHIVE_SHA256="$(shasum -a 256 "$OUTPUT" | awk '{print $1}')"
 cat > "${OUTPUT%.zip}.metadata.json" <<META

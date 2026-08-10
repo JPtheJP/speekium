@@ -60,8 +60,22 @@ MANIFEST="$STAGING/runtime/manifest.json"
 PYTHON="$STAGING/runtime/bin/python3.12"
 [ -f "$MANIFEST" ] && [ -x "$PYTHON" ] || { echo "error: runtime manifest or Python executable missing" >&2; exit 1; }
 MANIFEST_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtimeVersion"])' "$MANIFEST")"
+MANIFEST_MIN_OS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["minimumMacOS"])' "$MANIFEST")"
 [ "$MANIFEST_VERSION" = "$RUNTIME_VERSION" ] || { echo "error: runtime manifest version disagrees with app" >&2; exit 1; }
+[ "$MANIFEST_MIN_OS" = "$MIN_OS" ] || { echo "error: runtime and app minimum macOS versions disagree" >&2; exit 1; }
 PYTHONNOUSERSITE=1 PYTHONPATH= PYTHONHOME= VIRTUAL_ENV= "$PYTHON" -s -u -c 'import mlx, numpy, huggingface_hub, mlx_qwen3_asr'
-codesign --verify --strict "$PYTHON"
+
+version_at_most() {
+    [ "$1" = "$2" ] || [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$2" ]
+}
+
+while IFS= read -r FILE; do
+    BINARY_MIN_OS="$(vtool -show-build "$FILE" 2>/dev/null | awk '/minos/ {print $2; exit}')"
+    [ -n "$BINARY_MIN_OS" ] && version_at_most "$BINARY_MIN_OS" "$MIN_OS" || {
+        echo "error: runtime binary requires macOS ${BINARY_MIN_OS:-unknown}: $FILE" >&2
+        exit 1
+    }
+    codesign --verify --strict "$FILE"
+done < <(find "$STAGING/runtime" -type f -print0 | xargs -0 file | awk -F: '/Mach-O/ {print $1}')
 
 echo "release artifacts validated"

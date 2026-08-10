@@ -32,7 +32,7 @@ final class InstallationReleaseTests: XCTestCase {
             dependencySet: "mlx-qwen3-asr-0.3.5",
             payloadBytes: 100,
             dependencyVersions: [
-                "mlx": "0.32.0",
+                "mlx": "0.29.4",
                 "numpy": "2.5.1",
                 "huggingface-hub": "1.26.0",
                 "mlx-qwen3-asr": "0.3.5",
