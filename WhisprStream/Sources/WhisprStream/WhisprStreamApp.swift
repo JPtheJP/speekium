@@ -150,6 +150,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.state.level = self.state.level * 0.55 + CGFloat(level) * 0.45
             }
         }
+        capture.onFailure = { [weak self] error in
+            guard let self, self.state.phase == .listening else { return }
+            self.state.stopDictationTimer()
+            self.state.level = 0
+            self.state.phase = .failed("Microphone unavailable")
+            self.asr.stopUtterance()
+            Log.write("microphone capture stopped: \(error.localizedDescription)")
+            self.scheduleDismiss(after: 1.8)
+        }
         refreshStatusMenu()
     }
 
