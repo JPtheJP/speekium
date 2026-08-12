@@ -6,6 +6,11 @@ struct VoiceShortcutsView: View {
 
     @State private var editorDraft: ShortcutEditorDraft?
     @State private var deleteID: UUID?
+    @State private var isImporting = false
+    @State private var isExporting = false
+    @State private var exportDocument = VoiceShortcutDocument(shortcuts: [])
+    @State private var importPreview: ShortcutImportPreview?
+    @State private var transferError: String?
 
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
@@ -27,6 +32,48 @@ struct VoiceShortcutsView: View {
                 onSave: save
             )
         }
+        .fileImporter(
+            isPresented: $isImporting,
+            allowedContentTypes: [VoiceShortcutTransfer.contentType],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case let .success(urls):
+                guard let url = urls.first else { return }
+                prepareImport(from: url)
+            case let .failure(error):
+                if (error as NSError).code != NSUserCancelledError {
+                    transferError = error.localizedDescription
+                }
+            }
+        }
+        .fileExporter(
+            isPresented: $isExporting,
+            document: exportDocument,
+            contentType: VoiceShortcutTransfer.contentType,
+            defaultFilename: "WhisprStream Voice Shortcuts"
+        ) { result in
+            if case let .failure(error) = result,
+               (error as NSError).code != NSUserCancelledError {
+                transferError = error.localizedDescription
+            }
+        }
+        .alert(item: $importPreview) { preview in
+            let newCount = preview.shortcuts.count - preview.existingMatches
+            let message = "This file contains \(preview.shortcuts.count) shortcuts. "
+                + "\(preview.existingMatches) have triggers already in your current list. "
+                + "Adding will import \(newCount) new shortcuts and keep the current versions."
+            return Alert(
+                title: Text("Import Voice Shortcuts"),
+                message: Text(message),
+                primaryButton: .default(Text("Add to Existing")) {
+                    applyImport(preview, replacing: false)
+                },
+                secondaryButton: .destructive(Text("Replace Existing")) {
+                    applyImport(preview, replacing: true)
+                }
+            )
+        }
         .alert(
             "Delete Voice Shortcut?",
             isPresented: Binding(
@@ -44,6 +91,17 @@ struct VoiceShortcutsView: View {
         } message: {
             Text("This shortcut's replacement text will be removed.")
         }
+        .alert(
+            "Voice Shortcut Transfer Failed",
+            isPresented: Binding(
+                get: { transferError != nil },
+                set: { if !$0 { transferError = nil } }
+            )
+        ) {
+            Button("OK") { transferError = nil }
+        } message: {
+            Text(transferError ?? "Unknown error")
+        }
     }
 
     private var header: some View {
@@ -58,6 +116,27 @@ struct VoiceShortcutsView: View {
             }
 
             Spacer(minLength: 12)
+
+            Menu {
+                Button {
+                    isImporting = true
+                } label: {
+                    Label("Import Shortcuts…", systemImage: "square.and.arrow.down")
+                }
+
+                Button {
+                    exportDocument = VoiceShortcutDocument(shortcuts: settings.voiceShortcuts)
+                    isExporting = true
+                } label: {
+                    Label("Export Shortcuts…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(settings.voiceShortcuts.isEmpty)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 16))
+            }
+            .menuStyle(.borderlessButton)
+            .help("Import or export Voice Shortcuts")
 
             Button {
                 editorDraft = ShortcutEditorDraft(shortcut: nil)
@@ -147,7 +226,7 @@ struct VoiceShortcutsView: View {
 
     private var privacyNote: some View {
         Label {
-            Text("Shortcuts stay on this Mac and are inserted through the clipboard. Do not use them for passwords or API keys.")
+            Text("Shortcuts stay on this Mac and are inserted through the clipboard. Exported files contain the full replacement text. Do not use shortcuts for passwords or API keys.")
         } icon: {
             Image(systemName: "lock.shield")
         }
@@ -252,6 +331,56 @@ struct VoiceShortcutsView: View {
             Log.write("voice shortcut save rejected: \(error)")
         }
     }
+
+    private func prepareImport(from url: URL) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let shortcuts = try VoiceShortcutTransfer.parse(Data(contentsOf: url))
+            let existingKeys = Set(settings.voiceShortcuts.map {
+                VoiceShortcutValidation.normalizedTrigger($0.trigger).key
+            })
+            let existingMatches = shortcuts.filter {
+                existingKeys.contains(VoiceShortcutValidation.normalizedTrigger($0.trigger).key)
+            }.count
+            importPreview = ShortcutImportPreview(
+                shortcuts: shortcuts,
+                existingMatches: existingMatches
+            )
+        } catch {
+            transferError = error.localizedDescription
+        }
+    }
+
+    private func applyImport(_ preview: ShortcutImportPreview, replacing: Bool) {
+        let updated: [VoiceShortcut]
+        if replacing {
+            updated = preview.shortcuts
+        } else {
+            var existingKeys = Set(settings.voiceShortcuts.map {
+                VoiceShortcutValidation.normalizedTrigger($0.trigger).key
+            })
+            let additions = preview.shortcuts.filter {
+                existingKeys.insert(VoiceShortcutValidation.normalizedTrigger($0.trigger).key).inserted
+            }
+            updated = settings.voiceShortcuts + additions
+        }
+
+        do {
+            try settings.setVoiceShortcuts(updated)
+        } catch {
+            transferError = error.localizedDescription
+        }
+    }
+}
+
+private struct ShortcutImportPreview: Identifiable {
+    let id = UUID()
+    let shortcuts: [VoiceShortcut]
+    let existingMatches: Int
 }
 
 private extension View {

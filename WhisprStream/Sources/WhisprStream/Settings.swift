@@ -309,6 +309,18 @@ final class Settings: ObservableObject {
         voiceShortcuts[index].isEnabled = enabled
     }
 
+    /// Replaces the complete shortcut list after validating the same invariants
+    /// as the editor. Used by import so invalid or duplicate triggers can never
+    /// bypass normal shortcut validation.
+    func setVoiceShortcuts(_ shortcuts: [VoiceShortcut]) throws {
+        var validated: [VoiceShortcut] = []
+        for shortcut in shortcuts {
+            try VoiceShortcutValidation.validate(shortcut, against: validated)
+            validated.append(shortcut)
+        }
+        voiceShortcuts = validated
+    }
+
     private func persistVoiceShortcuts() {
         guard let data = try? JSONEncoder().encode(voiceShortcuts) else {
             Log.write("voice shortcuts save failed")
