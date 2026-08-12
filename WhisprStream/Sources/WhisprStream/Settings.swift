@@ -389,11 +389,11 @@ final class Settings: ObservableObject {
         usePunctuation = defaults.object(forKey: Keys.usePunctuation) as? Bool ?? true
         contextAwareCapitalization = defaults.object(
             forKey: Keys.contextAwareCapitalization
-        ) as? Bool ?? true
+        ) as? Bool ?? false
         shortUtteranceLanguage = ShortUtteranceLanguage(
             rawValue: defaults.string(forKey: Keys.shortUtteranceLanguage) ?? ""
         ) ?? .smartEnglishChinese
-        playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? false
+        playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? true
         // Migration: before pairs, the choice lived in `insertSound` as a bare
         // alert-sound name. Carry it over so an existing setting is preserved
         // rather than silently reset to a new default.

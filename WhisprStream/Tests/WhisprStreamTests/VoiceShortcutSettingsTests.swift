@@ -35,8 +35,12 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         XCTAssertEqual(reloaded.asrContext, "Claude\nGitHub\nhaha github")
     }
 
-    func testContextAwareCapitalizationDefaultsOn() {
-        XCTAssertTrue(Settings(defaults: makeDefaults()).contextAwareCapitalization)
+    func testContextAwareCapitalizationDefaultsOff() {
+        XCTAssertFalse(Settings(defaults: makeDefaults()).contextAwareCapitalization)
+    }
+
+    func testPlaySoundDefaultsOn() {
+        XCTAssertTrue(Settings(defaults: makeDefaults()).playSound)
     }
 
     func testOneWordDictationOffersEveryQwenLanguageWithoutAutomatic() {
