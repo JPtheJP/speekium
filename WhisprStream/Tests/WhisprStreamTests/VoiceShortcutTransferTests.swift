@@ -55,4 +55,30 @@ final class VoiceShortcutTransferTests: XCTestCase {
             )
         }
     }
+
+    func testAppendingKeepsExistingShortcutAndAddsOnlyNewTriggers() {
+        let existing = VoiceShortcut(
+            id: UUID(),
+            trigger: "hello world",
+            replacement: "keep this",
+            isEnabled: false
+        )
+        let conflict = VoiceShortcut(
+            id: UUID(),
+            trigger: "HELLO, WORLD!",
+            replacement: "do not overwrite",
+            isEnabled: true
+        )
+        let newShortcut = VoiceShortcut(
+            id: UUID(),
+            trigger: "shortcut website",
+            replacement: "https://example.com",
+            isEnabled: true
+        )
+
+        XCTAssertEqual(
+            VoiceShortcutTransfer.appending([conflict, newShortcut], to: [existing]),
+            [existing, newShortcut]
+        )
+    }
 }

@@ -58,6 +58,22 @@ enum VoiceShortcutTransfer {
     static let contentType = UTType.json
     static let currentFormatVersion = 1
 
+    /// Appends shortcuts whose normalized triggers are new. A matching trigger
+    /// from an import never changes the user's existing replacement or enabled
+    /// state.
+    static func appending(
+        _ imported: [VoiceShortcut],
+        to existing: [VoiceShortcut]
+    ) -> [VoiceShortcut] {
+        var existingKeys = Set(existing.map {
+            VoiceShortcutValidation.normalizedTrigger($0.trigger).key
+        })
+        let additions = imported.filter {
+            existingKeys.insert(VoiceShortcutValidation.normalizedTrigger($0.trigger).key).inserted
+        }
+        return existing + additions
+    }
+
     static func parse(_ data: Data) throws -> [VoiceShortcut] {
         let archive: VoiceShortcutTransferArchive
         do {

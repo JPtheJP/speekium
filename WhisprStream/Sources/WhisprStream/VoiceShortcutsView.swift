@@ -60,18 +60,23 @@ struct VoiceShortcutsView: View {
         }
         .alert(item: $importPreview) { preview in
             let newCount = preview.shortcuts.count - preview.existingMatches
-            let message = "This file contains \(preview.shortcuts.count) shortcuts. "
-                + "\(preview.existingMatches) have triggers already in your current list. "
-                + "Adding will import \(newCount) new shortcuts and keep the current versions."
+            let message = "This file contains \(newCount) new shortcuts. "
+                + "They will be added to your current shortcuts; existing shortcuts will stay unchanged. "
+                + "\(preview.existingMatches) matching triggers will be ignored."
+            if newCount == 0 {
+                return Alert(
+                    title: Text("No New Voice Shortcuts"),
+                    message: Text(message),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
             return Alert(
                 title: Text("Import Voice Shortcuts"),
                 message: Text(message),
-                primaryButton: .default(Text("Add to Existing")) {
-                    applyImport(preview, replacing: false)
+                primaryButton: .default(Text("Import \(newCount) New")) {
+                    applyImport(preview)
                 },
-                secondaryButton: .destructive(Text("Replace Existing")) {
-                    applyImport(preview, replacing: true)
-                }
+                secondaryButton: .cancel()
             )
         }
         .alert(
@@ -355,20 +360,11 @@ struct VoiceShortcutsView: View {
         }
     }
 
-    private func applyImport(_ preview: ShortcutImportPreview, replacing: Bool) {
-        let updated: [VoiceShortcut]
-        if replacing {
-            updated = preview.shortcuts
-        } else {
-            var existingKeys = Set(settings.voiceShortcuts.map {
-                VoiceShortcutValidation.normalizedTrigger($0.trigger).key
-            })
-            let additions = preview.shortcuts.filter {
-                existingKeys.insert(VoiceShortcutValidation.normalizedTrigger($0.trigger).key).inserted
-            }
-            updated = settings.voiceShortcuts + additions
-        }
-
+    private func applyImport(_ preview: ShortcutImportPreview) {
+        let updated = VoiceShortcutTransfer.appending(
+            preview.shortcuts,
+            to: settings.voiceShortcuts
+        )
         do {
             try settings.setVoiceShortcuts(updated)
         } catch {
