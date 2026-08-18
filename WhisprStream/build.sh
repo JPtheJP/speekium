@@ -10,7 +10,7 @@ PROJECT_ROOT="$(cd .. && pwd)"
 PYTHON="${PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 APP="${APP:-$PROJECT_ROOT/WhisprStream.app}"
 VERSION="${VERSION:-1.0.1}"
-BUILD_NUMBER="${BUILD_NUMBER:-1}"
+BUILD_NUMBER="${BUILD_NUMBER:-2}"
 RELEASE="${RELEASE:-0}"
 RUNTIME_URL="${RUNTIME_URL:-}"
 RUNTIME_SHA256="${RUNTIME_SHA256:-}"
@@ -22,6 +22,11 @@ BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-dev.local.whisprstream}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 
 if [ "$RELEASE" = "1" ]; then
+    if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || ! [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+        echo "error: release app version must be stable semantic version and build number must be positive" >&2
+        exit 1
+    fi
     if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ] || [ -z "$RUNTIME_VERSION" ] \
         || [ -z "$RUNTIME_ARCHIVE_BYTES" ] || [ -z "$RUNTIME_INSTALLED_BYTES" ]; then
         echo "error: release builds require runtime URL, version, checksum, and byte metadata" >&2

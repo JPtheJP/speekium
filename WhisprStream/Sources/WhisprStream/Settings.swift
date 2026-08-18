@@ -163,8 +163,8 @@ final class Settings: ObservableObject {
     }
 
     /// Match the transcript's opening capitalization to text at the active
-    /// cursor. Apps without readable cursor context require a brief reversible
-    /// keyboard probe, so users can disable this when minimum latency matters.
+    /// cursor. Apps without readable cursor context use a guarded keyboard
+    /// probe that must finish before the transcript is inserted.
     @Published var contextAwareCapitalization: Bool {
         didSet {
             defaults.set(

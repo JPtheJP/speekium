@@ -21,8 +21,11 @@ Create the runtime release asset as `WhisprStream-runtime-1.0.0-arm64.zip` and r
 
 The app must embed an immutable tag-specific runtime URL, never `latest/download`:
 
+App version `1.0.1` intentionally reuses runtime version `1.0.0`; the runtime
+version changes only when the standalone Python or dependency payload changes.
+
 ```bash
-RELEASE=1 VERSION=1.0.0 BUILD_NUMBER=1 \
+RELEASE=1 VERSION=1.0.1 BUILD_NUMBER=2 \
 BUNDLE_IDENTIFIER="com.leoleo.whisprstream" \
 SIGNING_IDENTITY="WhisprStream Self-Signed" \
 RUNTIME_VERSION=1.0.0 \
@@ -42,12 +45,14 @@ ditto -c -k --sequesterRsrc --keepParent \
   WhisprStream.app WhisprStream-macos-arm64.zip
 ```
 
-Create `SHA256SUMS` for both assets and run the read-only validator after extracting the app archive:
+Create `SHA256SUMS` for both assets and run the read-only validator. The
+validator extracts the app with macOS metadata preserved and rejects an
+unexpected app version or build number:
 
 ```bash
 shasum -a 256 WhisprStream-macos-arm64.zip WhisprStream-runtime-1.0.0-arm64.zip > SHA256SUMS
 WhisprStream/validate-release.sh WhisprStream-macos-arm64.zip \
-  WhisprStream-runtime-1.0.0-arm64.zip SHA256SUMS
+  WhisprStream-runtime-1.0.0-arm64.zip SHA256SUMS 1.0.1 2
 ```
 
 ## 3. Stable self-signing
@@ -58,7 +63,7 @@ Self-signing does not provide Apple trust, does not notarize the app, and does n
 
 ## 4. Draft release and clean-Mac qualification
 
-For the first release, create a draft GitHub Release tagged `v1.0.0`, upload:
+For this release, create a draft GitHub Release tagged `v1.0.1`, upload:
 
 - `WhisprStream-macos-arm64.zip`
 - `WhisprStream-runtime-1.0.0-arm64.zip`

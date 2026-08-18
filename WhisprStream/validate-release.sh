@@ -2,9 +2,26 @@
 # Read-only validation for finished WhisprStream release artifacts.
 set -euo pipefail
 
-APP="${1:?usage: validate-release.sh WhisprStream-macos-arm64.app.zip runtime.zip SHA256SUMS}"
-RUNTIME_ZIP="${2:?usage: validate-release.sh app.zip runtime.zip SHA256SUMS}"
-SHA256SUMS="${3:?usage: validate-release.sh app.zip runtime.zip SHA256SUMS}"
+usage() {
+    echo "usage: validate-release.sh app.zip runtime.zip SHA256SUMS app-version build-number" >&2
+    exit 2
+}
+
+[ "$#" -eq 5 ] || usage
+APP="$1"
+RUNTIME_ZIP="$2"
+SHA256SUMS="$3"
+EXPECTED_APP_VERSION="$4"
+EXPECTED_BUILD_NUMBER="$5"
+
+[[ "$EXPECTED_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "error: expected app version must be stable semantic version" >&2
+    exit 1
+}
+[[ "$EXPECTED_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+    echo "error: expected build number must be a positive integer" >&2
+    exit 1
+}
 
 for FILE in "$APP" "$RUNTIME_ZIP" "$SHA256SUMS"; do
     [ -f "$FILE" ] || { echo "error: missing $FILE" >&2; exit 1; }
@@ -12,13 +29,9 @@ done
 
 VALIDATION_TMP="$(mktemp -d "${TMPDIR:-/tmp}/whisprstream-release-check.XXXXXX")"
 trap 'rm -rf "$VALIDATION_TMP"' EXIT
-if [ -d "$APP" ]; then
-    APP_DIR="$APP"
-else
-    unzip -q "$APP" -d "$VALIDATION_TMP/app"
-    APP_DIR="$(find "$VALIDATION_TMP/app" -maxdepth 2 -type d -name __MACOSX -prune -o -type d -name 'WhisprStream.app' -print -quit)"
-    [ -n "$APP_DIR" ] || { echo "error: app archive has no WhisprStream.app" >&2; exit 1; }
-fi
+ditto -x -k "$APP" "$VALIDATION_TMP/app"
+APP_DIR="$(find "$VALIDATION_TMP/app" -maxdepth 2 -type d -name 'WhisprStream.app' -print -quit)"
+[ -n "$APP_DIR" ] || { echo "error: app archive has no WhisprStream.app" >&2; exit 1; }
 
 BIN="$APP_DIR/Contents/MacOS/WhisprStream"
 [ -x "$BIN" ] || { echo "error: app executable is missing" >&2; exit 1; }
@@ -31,6 +44,8 @@ codesign --verify --strict --deep "$APP_DIR"
 
 plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP_DIR/Contents/Info.plist" 2>/dev/null; }
 BUNDLE_ID="$(plist CFBundleIdentifier)"
+APP_VERSION="$(plist CFBundleShortVersionString)"
+BUILD_NUMBER="$(plist CFBundleVersion)"
 MIN_OS="$(plist LSMinimumSystemVersion)"
 DEV_PYTHON="$(plist WhisprDevelopmentPythonPath || true)"
 RUNTIME_VERSION="$(plist WhisprRuntimeVersion)"
@@ -40,6 +55,8 @@ ARCHIVE_BYTES="$(plist WhisprRuntimeArchiveBytes)"
 INSTALLED_BYTES="$(plist WhisprRuntimeInstalledBytes)"
 
 [ "$BUNDLE_ID" = "com.leoleo.whisprstream" ] || { echo "error: development bundle identifier" >&2; exit 1; }
+[ "$APP_VERSION" = "$EXPECTED_APP_VERSION" ] || { echo "error: app version is $APP_VERSION; expected $EXPECTED_APP_VERSION" >&2; exit 1; }
+[ "$BUILD_NUMBER" = "$EXPECTED_BUILD_NUMBER" ] || { echo "error: app build is $BUILD_NUMBER; expected $EXPECTED_BUILD_NUMBER" >&2; exit 1; }
 [ "$MIN_OS" = "14.0" ] || { echo "error: minimum macOS must be 14.0" >&2; exit 1; }
 [ -z "$DEV_PYTHON" ] || { echo "error: development Python path is embedded" >&2; exit 1; }
 [[ "$RUNTIME_URL" =~ ^https:// ]] && [[ "$RUNTIME_URL" != *latest/download* ]] || { echo "error: runtime URL is not immutable HTTPS" >&2; exit 1; }

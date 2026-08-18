@@ -125,6 +125,17 @@ WhisprStream/build.sh          # → WhisprStream.app at the repo root
 open WhisprStream.app
 ```
 
+Run the macOS system E2E for context-aware capitalization and cross-app paste:
+
+```bash
+WhisprStream/e2e-context-aware.sh
+```
+
+The test launches a temporary editor process and drives the signed development
+app's real keyboard/clipboard fallback, targeting that process directly so it
+also works in headless CI sessions. WhisprStream must already be allowed in
+System Settings → Privacy & Security → Accessibility.
+
 `build.sh` hardcodes the venv python into `Info.plist` as `WhisprPythonPath`.
 Override with `PYTHON=/path/to/python WhisprStream/build.sh`.
 

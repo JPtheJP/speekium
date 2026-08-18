@@ -2,9 +2,44 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
+struct DeferredTranscriptDelivery: Equatable {
+    let text: String
+    let adjustForCursor: Bool
+}
+
+struct TranscriptDeliveryGate {
+    private(set) var pending: DeferredTranscriptDelivery?
+
+    mutating func submit(
+        _ delivery: DeferredTranscriptDelivery,
+        whileContextIsResolving: Bool
+    ) -> DeferredTranscriptDelivery? {
+        guard whileContextIsResolving else {
+            pending = nil
+            return delivery
+        }
+        pending = delivery
+        return nil
+    }
+
+    mutating func takePending() -> DeferredTranscriptDelivery? {
+        defer { pending = nil }
+        return pending
+    }
+
+    mutating func reset() {
+        pending = nil
+    }
+}
+
 @main
 enum Main {
     static func main() {
+        if ContextAwareCapitalizationE2E.isRequested {
+            ContextAwareCapitalizationE2E.run()
+            return
+        }
+
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -34,6 +69,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var speechEngineStartupWork: DispatchWorkItem?
     private var shouldShowFirstDictationCoach = false
     private var precedingTextAtDictationStart: String?
+    private var resolvedPrecedingText: String?
+    private var hasResolvedPrecedingText = false
+    private var isResolvingPrecedingText = false
+    private var transcriptDeliveryGate = TranscriptDeliveryGate()
+    private var cursorContextGeneration = 0
+    private var activeCursorContextGeneration: Int?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = HUDPanel(state: state)
@@ -323,12 +364,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         guard state.phase != .listening else { return }
+        guard activeCursorContextGeneration == nil else {
+            Log.write("dictation start ignored while cursor context probe settles")
+            return
+        }
         dismissWork?.cancel()
+        cursorContextGeneration &+= 1
+        resolvedPrecedingText = nil
+        isResolvingPrecedingText = false
+        transcriptDeliveryGate.reset()
         precedingTextAtDictationStart = settings.autoInsert
             && (settings.contextAwareCapitalization
                 || settings.shortUtteranceLanguage == .smartEnglishChinese)
             ? TextInserter.textBeforeCursor()
             : nil
+        resolvedPrecedingText = precedingTextAtDictationStart
+        hasResolvedPrecedingText = precedingTextAtDictationStart != nil
         state.reset()
         state.phase = .listening
         state.startDictationTimer()
@@ -340,7 +391,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             precedingText: precedingTextAtDictationStart
         )
         asr.beginUtterance(shortUtteranceLanguage: shortLanguage)
-        do { try capture.start() } catch {
+        do {
+            try capture.start()
+            // Accessibility is instantaneous when an editor exposes its text.
+            // For other apps, run the guarded keyboard fallback while the user
+            // is speaking so its clipboard waits are off the critical path.
+            if settings.autoInsert,
+               settings.contextAwareCapitalization,
+               !hasResolvedPrecedingText {
+                startCursorContextResolution(allowWhilePhysicalModifiersPressed: true)
+            }
+        } catch {
+            cancelCursorContextResolution()
             state.stopDictationTimer()
             state.phase = .failed("Microphone unavailable")
             scheduleDismiss(after: 1.6)
@@ -353,6 +415,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.stopDictationTimer()
         state.level = 0
         state.phase = .thinking
+        if settings.autoInsert,
+           settings.contextAwareCapitalization,
+           !hasResolvedPrecedingText,
+           !isResolvingPrecedingText {
+            startCursorContextResolution(allowWhilePhysicalModifiersPressed: false)
+        }
         asr.stopUtterance()
     }
 
@@ -384,11 +452,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state.tail = tail
 
         case let .final(text, secs, ms):
-            let startingPrecedingText = precedingTextAtDictationStart
             precedingTextAtDictationStart = nil
             state.lastAudioSecs = secs
             state.lastDurationMS = ms
             guard !text.isEmpty else {
+                cancelCursorContextResolution()
                 dismissNow()
                 return
             }
@@ -404,28 +472,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.write("voice shortcut matched id=\(matchedID) inputChars=\(normalizedText.count) outputChars=\(expansion.text.count)")
             }
             // Shortcut replacements are user-authored literal output; preserve
-            // their casing even when they are inserted mid-sentence.
-            if settings.autoInsert,
-               settings.contextAwareCapitalization,
-               expansion.matchedShortcutID == nil {
-                TextInserter.resolveTextBeforeCursor(fallback: startingPrecedingText) {
-                    [weak self] precedingText in
-                    self?.deliverFinalTranscript(
-                        expansion.text,
-                        precedingText: precedingText,
-                        adjustForCursor: true
-                    )
-                }
+            // their casing even when they are inserted mid-sentence. Every
+            // delivery still passes through the gate: a keyboard cursor probe
+            // owns the selection and pasteboard until its completion callback,
+            // even when the final text does not need capitalization adjustment.
+            let delivery = DeferredTranscriptDelivery(
+                text: expansion.text,
+                adjustForCursor: settings.autoInsert
+                    && settings.contextAwareCapitalization
+                    && expansion.matchedShortcutID == nil
+            )
+            if let ready = transcriptDeliveryGate.submit(
+                delivery,
+                whileContextIsResolving: isResolvingPrecedingText
+            ) {
+                deliverTranscript(ready)
             } else {
-                deliverFinalTranscript(
-                    expansion.text,
-                    precedingText: nil,
-                    adjustForCursor: false
-                )
+                Log.write("transcript delivery waiting for cursor context probe")
             }
 
         case let .error(message):
-            precedingTextAtDictationStart = nil
+            cancelCursorContextResolution()
             if !isASRReady {
                 speechEngineStartupWork?.cancel()
                 speechEngineStartupWork = nil
@@ -442,7 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleDismiss(after: 1.8)
 
         case let .terminated(message):
-            precedingTextAtDictationStart = nil
+            cancelCursorContextResolution()
             speechEngineStartupWork?.cancel()
             speechEngineStartupWork = nil
             speechEngineStartedAt = nil
@@ -455,6 +522,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshStatusMenu()
             scheduleDismiss(after: 1.8)
         }
+    }
+
+    private func deliverPendingTranscriptIfReady() {
+        guard !isResolvingPrecedingText,
+              let delivery = transcriptDeliveryGate.takePending() else { return }
+        deliverTranscript(delivery)
+    }
+
+    private func startCursorContextResolution(
+        allowWhilePhysicalModifiersPressed: Bool
+    ) {
+        guard !isResolvingPrecedingText, !hasResolvedPrecedingText else { return }
+        let contextGeneration = cursorContextGeneration
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        isResolvingPrecedingText = true
+        activeCursorContextGeneration = contextGeneration
+        TextInserter.resolveTextBeforeCursor(
+            fallback: precedingTextAtDictationStart,
+            allowWhilePhysicalModifiersPressed: allowWhilePhysicalModifiersPressed
+        ) { [weak self] text in
+            guard let self,
+                  self.activeCursorContextGeneration == contextGeneration else { return }
+            self.activeCursorContextGeneration = nil
+            self.isResolvingPrecedingText = false
+            guard self.cursorContextGeneration == contextGeneration else { return }
+            self.hasResolvedPrecedingText = true
+            self.resolvedPrecedingText = text
+            let durationMS = Int(
+                (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            )
+            Log.write(
+                "cursor context prefetch finished duration=\(durationMS)ms "
+                    + "available=\(text != nil)"
+            )
+            self.deliverPendingTranscriptIfReady()
+        }
+    }
+
+    private func deliverTranscript(_ delivery: DeferredTranscriptDelivery) {
+        let precedingText = delivery.adjustForCursor ? resolvedPrecedingText : nil
+        cancelCursorContextResolution()
+        deliverFinalTranscript(
+            delivery.text,
+            precedingText: precedingText,
+            adjustForCursor: delivery.adjustForCursor
+        )
+    }
+
+    private func cancelCursorContextResolution() {
+        cursorContextGeneration &+= 1
+        precedingTextAtDictationStart = nil
+        resolvedPrecedingText = nil
+        hasResolvedPrecedingText = false
+        if activeCursorContextGeneration == nil {
+            isResolvingPrecedingText = false
+        }
+        transcriptDeliveryGate.reset()
     }
 
     private func deliverFinalTranscript(
