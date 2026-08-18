@@ -45,7 +45,7 @@ Remove these items separately according to what you want to keep:
 
 - `/Applications/WhisprStream.app` — the native app.
 - `~/Library/Application Support/WhisprStream/Runtime` — the private speech engine.
-- `~/Library/Caches/huggingface/hub/models--Qwen--Qwen3-ASR-0.6B` and/or `models--Qwen--Qwen3-ASR-1.7B` — optional model caches. A custom `HF_HUB_CACHE` or `HF_HOME` location may be elsewhere.
+- `~/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-0.6B` and/or `models--Qwen--Qwen3-ASR-1.7B` — optional model caches at the default Hugging Face cache location. A custom `HF_HUB_CACHE` or `HF_HOME` location may be elsewhere.
 - WhisprStream preferences in `~/Library/Preferences` — settings, vocabulary, and shortcuts.
 - `~/Library/Logs/WhisprStream.log` — diagnostic logs.
 

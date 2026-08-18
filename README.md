@@ -5,7 +5,9 @@
 <p align="center">Fast, private, multilingual dictation for Apple silicon Macs.</p>
 
 <p align="center">
-  <img src="assets/whisprstream-preview.png" alt="WhisprStream floating dictation HUD" width="900">
+  <a href="https://youtube.com/shorts/bEcz2JkVLvw">
+    <img src="https://img.youtube.com/vi/bEcz2JkVLvw/maxresdefault.jpg" alt="Watch the WhisprStream demo on YouTube" width="900">
+  </a>
 </p>
 
 WhisprStream is an open-source macOS dictation app that types at your cursor while you speak. It runs locally, keeps the model warm for low latency, and follows mixed-language sentences without uploading audio. Use it in any app—from notes and email to your terminal and coding agent.
