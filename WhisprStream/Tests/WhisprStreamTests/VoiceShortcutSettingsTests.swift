@@ -123,17 +123,62 @@ final class VoiceShortcutSettingsTests: XCTestCase {
 
     func testDeveloperFirstRunSimulationOffersFirstDictationCoach() {
         XCTAssertTrue(FirstDictationCoachPolicy.shouldOffer(
-            hasCompletedOnboarding: true,
+            needsFirstDictationCoach: false,
             isDeveloperFirstRunSimulation: true
         ))
         XCTAssertTrue(FirstDictationCoachPolicy.shouldOffer(
-            hasCompletedOnboarding: false,
+            needsFirstDictationCoach: true,
             isDeveloperFirstRunSimulation: false
         ))
         XCTAssertFalse(FirstDictationCoachPolicy.shouldOffer(
-            hasCompletedOnboarding: true,
+            needsFirstDictationCoach: false,
             isDeveloperFirstRunSimulation: false
         ))
+    }
+
+    func testFirstDictationCoachWaitsForEveryRuntimePrerequisite() {
+        XCTAssertTrue(FirstDictationCoachPolicy.shouldPresent(
+            isQueued: true,
+            isSpeechEngineReady: true,
+            hasMicrophonePermission: true,
+            hasAccessibilityPermission: true
+        ))
+
+        for missing in 0..<4 {
+            var prerequisites = [true, true, true, true]
+            prerequisites[missing] = false
+            XCTAssertFalse(FirstDictationCoachPolicy.shouldPresent(
+                isQueued: prerequisites[0],
+                isSpeechEngineReady: prerequisites[1],
+                hasMicrophonePermission: prerequisites[2],
+                hasAccessibilityPermission: prerequisites[3]
+            ))
+        }
+    }
+
+    func testNewInstallPersistsPendingFirstDictationCoachUntilHandled() {
+        let defaults = makeDefaults()
+        var settings = Settings(defaults: defaults)
+
+        XCTAssertFalse(settings.hasCompletedOnboarding)
+        XCTAssertTrue(settings.needsFirstDictationCoach)
+
+        settings.hasCompletedOnboarding = true
+        settings = Settings(defaults: defaults)
+        XCTAssertTrue(settings.needsFirstDictationCoach)
+
+        settings.needsFirstDictationCoach = false
+        XCTAssertFalse(Settings(defaults: defaults).needsFirstDictationCoach)
+    }
+
+    func testExistingOnboardedUserDoesNotReceiveMigratedFirstRunCoach() {
+        let defaults = makeDefaults()
+        defaults.set(true, forKey: "hasCompletedOnboarding")
+
+        let settings = Settings(defaults: defaults)
+
+        XCTAssertFalse(settings.needsFirstDictationCoach)
+        XCTAssertEqual(defaults.object(forKey: "needsFirstDictationCoach") as? Bool, false)
     }
 
     func testLegacyAutomaticShortLanguageMigratesToSmartBilingual() {

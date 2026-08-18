@@ -3,10 +3,22 @@ import SwiftUI
 
 enum FirstDictationCoachPolicy {
     static func shouldOffer(
-        hasCompletedOnboarding: Bool,
+        needsFirstDictationCoach: Bool,
         isDeveloperFirstRunSimulation: Bool
     ) -> Bool {
-        !hasCompletedOnboarding || isDeveloperFirstRunSimulation
+        needsFirstDictationCoach || isDeveloperFirstRunSimulation
+    }
+
+    static func shouldPresent(
+        isQueued: Bool,
+        isSpeechEngineReady: Bool,
+        hasMicrophonePermission: Bool,
+        hasAccessibilityPermission: Bool
+    ) -> Bool {
+        isQueued
+            && isSpeechEngineReady
+            && hasMicrophonePermission
+            && hasAccessibilityPermission
     }
 }
 

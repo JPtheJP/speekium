@@ -88,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let trusted = AXIsProcessTrusted()
         Log.write("launch: accessibility=\(trusted ? "granted" : "DENIED") "
                   + "onboarded=\(settings.hasCompletedOnboarding) "
+                  + "coachPending=\(settings.needsFirstDictationCoach) "
                   + "developerTestMode=\(DeveloperTestMode.isEnabled)")
         NotificationCenter.default.addObserver(
             self,
@@ -97,10 +98,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         if runtime.isReady, ModelCatalog.state(for: settings.model).isInstalled {
+            if settings.hasCompletedOnboarding {
+                queueFirstDictationCoachIfNeeded()
+            }
             startSpeechEngine()
             if settings.hasCompletedOnboarding {
                 // Onboarding requests these itself; only prompt directly when skipped.
-                AVCaptureDevice.requestAccess(for: .audio) { _ in }
+                AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+                    Task { @MainActor in self?.presentFirstDictationCoachIfReady() }
+                }
                 if !trusted { HotKeyMonitor.ensureAccessibility() }
             } else {
                 showOnboarding()
@@ -108,6 +114,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             presentSetup()
         }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // Returning from System Settings is the only reliable signal that an
+        // Accessibility grant may have changed. A pending coach survives the
+        // permission-skip path and is retried here.
+        presentFirstDictationCoachIfReady()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -124,10 +137,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOnboarding() {
-        let shouldOfferFirstDictationCoach = FirstDictationCoachPolicy.shouldOffer(
-            hasCompletedOnboarding: settings.hasCompletedOnboarding,
-            isDeveloperFirstRunSimulation: DeveloperTestMode.isEnabled
-        )
         windows.showOnboarding(
             settings: settings,
             runtime: runtime,
@@ -136,22 +145,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.settings.hasCompletedOnboarding = true
             self.startSpeechEngine()
-            if shouldOfferFirstDictationCoach,
-               AXIsProcessTrusted(),
-               AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
-                self.shouldShowFirstDictationCoach = true
-                self.presentFirstDictationCoachIfReady()
-            }
+            self.queueFirstDictationCoachIfNeeded()
         }
     }
 
+    private func queueFirstDictationCoachIfNeeded() {
+        guard FirstDictationCoachPolicy.shouldOffer(
+            needsFirstDictationCoach: settings.needsFirstDictationCoach,
+            isDeveloperFirstRunSimulation: DeveloperTestMode.isEnabled
+        ) else { return }
+        shouldShowFirstDictationCoach = true
+        presentFirstDictationCoachIfReady()
+    }
+
     private func presentFirstDictationCoachIfReady() {
-        guard shouldShowFirstDictationCoach, isASRReady else { return }
-        shouldShowFirstDictationCoach = false
+        guard FirstDictationCoachPolicy.shouldPresent(
+            isQueued: shouldShowFirstDictationCoach,
+            isSpeechEngineReady: isASRReady,
+            hasMicrophonePermission: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+            hasAccessibilityPermission: AXIsProcessTrusted()
+        ) else { return }
+        markFirstDictationCoachHandled()
         windows.showFirstDictationCoach(
             key: settings.triggerKey,
             mode: settings.activationMode
         )
+    }
+
+    private func markFirstDictationCoachHandled() {
+        shouldShowFirstDictationCoach = false
+        settings.needsFirstDictationCoach = false
     }
 
     private func startSpeechEngine() {
@@ -169,7 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey = HotKeyMonitor(key: settings.triggerKey, mode: settings.activationMode)
         hotkey.onStart = { [weak self] in
             guard let self else { return }
-            self.shouldShowFirstDictationCoach = false
+            if self.shouldShowFirstDictationCoach {
+                self.markFirstDictationCoachHandled()
+            }
             self.windows.dismissFirstDictationCoach()
             self.beginDictation()
         }

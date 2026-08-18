@@ -352,6 +352,14 @@ final class Settings: ObservableObject {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.onboarded) }
     }
 
+    /// Remains true until the first-dictation invitation is either displayed
+    /// or made unnecessary by the user starting a dictation themselves.
+    /// Keeping this separate from onboarding lets a user grant permissions
+    /// after setup (or after relaunching) without losing the invitation.
+    @Published var needsFirstDictationCoach: Bool {
+        didSet { defaults.set(needsFirstDictationCoach, forKey: Keys.firstDictationCoachPending) }
+    }
+
     /// True while the sidecar is reloading after a model switch. Drives the
     /// Settings UI only; the HUD has its own `.loading` phase.
     @Published var isReloadingModel = false
@@ -388,6 +396,7 @@ final class Settings: ObservableObject {
         static let voiceShortcuts = "voiceShortcuts.v1"
         static let model = "model"
         static let onboarded = "hasCompletedOnboarding"
+        static let firstDictationCoachPending = "needsFirstDictationCoach"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -436,7 +445,17 @@ final class Settings: ObservableObject {
             voiceShortcuts = []
         }
         model = ASRModel(rawValue: defaults.string(forKey: Keys.model) ?? "") ?? .small
-        hasCompletedOnboarding = defaults.bool(forKey: Keys.onboarded)
+        let completedOnboarding = defaults.bool(forKey: Keys.onboarded)
+        hasCompletedOnboarding = completedOnboarding
+        if let pending = defaults.object(forKey: Keys.firstDictationCoachPending) as? Bool {
+            needsFirstDictationCoach = pending
+        } else {
+            // A genuinely new or unfinished installation should receive the
+            // invitation. Existing users upgrading from a version without this
+            // key have already completed setup, so do not replay first-run UI.
+            needsFirstDictationCoach = !completedOnboarding
+            defaults.set(needsFirstDictationCoach, forKey: Keys.firstDictationCoachPending)
+        }
 
         warm(soundTheme)
     }
