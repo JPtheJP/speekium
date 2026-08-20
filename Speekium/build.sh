@@ -71,6 +71,7 @@ cp "$BIN" "$APP/Contents/MacOS/Speekium"
 cp Resources/asr_server.py "$APP/Contents/Resources/"
 cp Resources/model_download.py "$APP/Contents/Resources/"
 cp "$PROJECT_ROOT/asr_engine.py" "$APP/Contents/Resources/"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 # Designed start/finish sounds. Regenerate with sound-design/render_sounds.py.
 if [ -d Resources/Sounds ]; then
@@ -93,6 +94,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>Speekium</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key>
