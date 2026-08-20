@@ -1,4 +1,4 @@
-# Runtime used by WhisprStream's Python ASR sidecar.
+# Runtime used by Speekium's Python ASR sidecar.
 # These versions are the known-good Apple Silicon environment used to build
 # the app. Keep this file in sync with the venv when upgrading the model stack.
 mlx==0.32.0

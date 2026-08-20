@@ -9,12 +9,12 @@ __pycache__/
 *.pyc
 
 # Locally built application bundle
-WhisprStream.app/
+Speekium.app/
 
 # ML model weights
 models/
 
 # Swift build artifacts
-WhisprStream/.build/
+Speekium/.build/
 # macOS
 .DS_Store

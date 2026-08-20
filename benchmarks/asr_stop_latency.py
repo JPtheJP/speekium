@@ -11,7 +11,7 @@ excluded.
 Usage:
     .venv/bin/python benchmarks/asr_stop_latency.py --trials 3
 
-WHISPR_MODEL, WHISPR_BITS, and WHISPR_CONTEXT match the app's sidecar settings.
+SPEEKIUM_MODEL, SPEEKIUM_BITS, and SPEEKIUM_CONTEXT match the app's sidecar settings.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RESOURCES = ROOT / "WhisprStream" / "Resources"
+RESOURCES = ROOT / "Speekium" / "Resources"
 sys.path.insert(0, str(RESOURCES))
 
 import asr_server  # noqa: E402
@@ -169,9 +169,9 @@ def main() -> int:
     if args.trials < 1:
         parser.error("--trials must be at least 1")
 
-    model = os.environ.get("WHISPR_MODEL", "Qwen/Qwen3-ASR-0.6B")
-    bits = int(os.environ.get("WHISPR_BITS", "8"))
-    context = os.environ.get("WHISPR_CONTEXT", "")
+    model = os.environ.get("SPEEKIUM_MODEL", "Qwen/Qwen3-ASR-0.6B")
+    bits = int(os.environ.get("SPEEKIUM_BITS", "8"))
+    context = os.environ.get("SPEEKIUM_CONTEXT", "")
 
     capture = EventCapture()
     original_emit = asr_server.emit

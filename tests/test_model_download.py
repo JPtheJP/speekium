@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 
-MODULE_PATH = Path(__file__).parents[1] / "WhisprStream" / "Resources" / "model_download.py"
-SPEC = importlib.util.spec_from_file_location("whispr_model_download", MODULE_PATH)
+MODULE_PATH = Path(__file__).parents[1] / "Speekium" / "Resources" / "model_download.py"
+SPEC = importlib.util.spec_from_file_location("speekium_model_download", MODULE_PATH)
 model_download = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(model_download)
 

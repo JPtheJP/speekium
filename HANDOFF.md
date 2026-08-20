@@ -1,4 +1,4 @@
-# WhisprStream — handoff
+# Speekium — handoff
 
 ## Voice Shortcuts
 
@@ -16,13 +16,13 @@ versioned `voiceShortcuts.v1` UserDefaults key.
 
 New files:
 
-- `WhisprStream/Sources/WhisprStream/VoiceShortcut.swift` — model, normalizer,
+- `Speekium/Sources/Speekium/VoiceShortcut.swift` — model, normalizer,
   and validation.
-- `WhisprStream/Sources/WhisprStream/TranscriptExpander.swift` — deterministic
+- `Speekium/Sources/Speekium/TranscriptExpander.swift` — deterministic
   final-transcript expansion.
-- `WhisprStream/Sources/WhisprStream/VoiceShortcutsView.swift` — settings list
+- `Speekium/Sources/Speekium/VoiceShortcutsView.swift` — settings list
   and add/edit sheet.
-- `WhisprStream/Tests/WhisprStreamTests/TranscriptExpanderTests.swift` and
+- `Speekium/Tests/SpeekiumTests/TranscriptExpanderTests.swift` and
   `VoiceShortcutSettingsTests.swift` — domain and persistence/context tests.
 
 The SwiftPM test target runs with `swift test`; real-voice recognition QA on
@@ -31,7 +31,7 @@ both supported models remains a manual follow-up.
 On-device dictation for macOS that handles **Chinese and English mixed in one
 sentence**. Built on an M1 Max / 32 GB, macOS 26.5, Swift 6.2.
 
-Replaces OpenWhispr, whose Whisper backend can't code-switch and only transcribes
+Replaces OpenSpeekium, whose Whisper backend can't code-switch and only transcribes
 after you stop talking.
 
 ---
@@ -81,10 +81,10 @@ work for identical output. Not recommended.
 ### Files
 
 ```
-whispr-stream/
+speekium/
 ├── asr_engine.py                    # shared model loading + quantization
-├── whispr.py                        # CLI: push-to-talk, no live preview
-├── whispr_live.py                   # CLI: live preview (reference impl)
+├── speekium.py                        # CLI: push-to-talk, no live preview
+├── speekium_live.py                   # CLI: live preview (reference impl)
 ├── record_sample.py                 # mic recorder for testing
 ├── sound-design/
 │   ├── index.html                   # the Web Audio design page (source of truth)
@@ -94,13 +94,13 @@ whispr-stream/
 ├── .venv/                           # mlx-qwen3-asr + pynput  ← the app uses this
 ├── .venv-voxtral/                   # voxmlx — diagnostics only, safe to delete
 ├── models/voxtral-6bit/             # 3.4 GB, rejected model, safe to delete
-└── WhisprStream/
+└── Speekium/
     ├── Package.swift                # SwiftPM, macOS 14+, Swift 5 language mode
     ├── build.sh                     # compiles + assembles + signs the .app
     ├── make-signing-cert.md         # fixes the TCC-on-rebuild problem
     ├── Resources/asr_server.py      # the sidecar
-    └── Sources/WhisprStream/
-        ├── WhisprStreamApp.swift    # @main, AppDelegate, lifecycle, menu bar
+    └── Sources/Speekium/
+        ├── SpeekiumApp.swift    # @main, AppDelegate, lifecycle, menu bar
         ├── AppState.swift           # Phase enum + observable HUD state
         ├── ASRService.swift         # sidecar process + JSON protocol
         ├── AudioCapture.swift       # AVAudioEngine → 16 kHz mono Int16
@@ -115,18 +115,18 @@ whispr-stream/
         ├── Permissions.swift        # polls mic + accessibility state
         ├── SoundPlayer.swift        # AudioServices system sounds
         ├── AppWindows.swift         # onboarding/settings/about windows
-        └── Log.swift                # ~/Library/Logs/WhisprStream.log
+        └── Log.swift                # ~/Library/Logs/Speekium.log
 ```
 
 ### Build & run
 
 ```bash
-WhisprStream/build.sh          # → WhisprStream.app at the repo root
-open WhisprStream.app
+Speekium/build.sh          # → Speekium.app at the repo root
+open Speekium.app
 ```
 
-`build.sh` hardcodes the venv python into `Info.plist` as `WhisprPythonPath`.
-Override with `PYTHON=/path/to/python WhisprStream/build.sh`.
+`build.sh` hardcodes the venv python into `Info.plist` as `SpeekiumPythonPath`.
+Override with `PYTHON=/path/to/python Speekium/build.sh`.
 
 ---
 
@@ -180,7 +180,7 @@ beat `Cloud`, but lowercase `codex` did not beat `CodeX`. A longer list and a
 full sentence framing did no better than the bare capitalized pair.
 
 Terms apply live via `{"cmd":"context"}` — no model reload. This matters: the
-sidecar reads `WHISPR_CONTEXT` from its environment only at spawn, so persisting
+sidecar reads `SPEEKIUM_CONTEXT` from its environment only at spawn, so persisting
 to UserDefaults alone leaves the running model on the old vocabulary until the
 next launch. `Settings.onContextChange` exists to prevent exactly that.
 
@@ -204,7 +204,7 @@ happens at load time from the fp16 weights — no separate download.
 `sound-design/index.html` designs ten **start/finish pairs** in Web Audio. There
 are no audio files in it — `render_sounds.py` is an offline port of that graph
 (same envelope semantics, same RBJ bandpass, band-limited triangle) that renders
-20 mono 44.1 kHz `.caf` files into `WhisprStream/Resources/Sounds/`. Edit a
+20 mono 44.1 kHz `.caf` files into `Speekium/Resources/Sounds/`. Edit a
 builder there and re-run; `build.sh` copies them into the bundle.
 
 Verified after rendering: every note lands within 0.3 % of its intended pitch
@@ -227,12 +227,12 @@ the code signature; ad-hoc signatures derive from the binary hash, so each rebui
 looks like a new app. The permission still *appears* enabled in System Settings
 while doing nothing. Symptom: hotkey and paste both silently stop.
 
-Fix: create a self-signed cert named exactly `WhisprStream Self-Signed`
+Fix: create a self-signed cert named exactly `Speekium Self-Signed`
 (see `make-signing-cert.md`); `build.sh` detects it and prints
 `▸ signing with stable identity`. Until then, remove **and re-add** the app in
 Accessibility after every rebuild — toggling off/on reuses the stale record.
 
-`~/Library/Logs/WhisprStream.log` logs `accessibility=granted|DENIED` at launch.
+`~/Library/Logs/Speekium.log` logs `accessibility=granted|DENIED` at launch.
 **Check this first** whenever the hotkey or paste goes quiet.
 
 **2. Synthetic ⌘V needs the right tap.** `.cgAnnotatedSessionEventTap` doesn't

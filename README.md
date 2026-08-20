@@ -1,16 +1,12 @@
 <p align="center">
-  <img src="assets/whisprstream-logo.png" alt="WhisprStream" width="520">
+  <img src="assets/speekium-logo.png" alt="Speekium" width="520">
 </p>
 
 <p align="center">Fast, private, multilingual dictation for Apple silicon Macs.</p>
 
-<p align="center">
-  <a href="https://youtube.com/shorts/bEcz2JkVLvw">
-    <img src="https://img.youtube.com/vi/bEcz2JkVLvw/maxresdefault.jpg" alt="Watch the WhisprStream demo on YouTube" width="900">
-  </a>
-</p>
+<p align="center"><sub>A fork of <a href="https://github.com/Leo6Leo/whispr-stream">WhisprStream</a> by Leo6Leo (MIT).</sub></p>
 
-WhisprStream is an open-source macOS dictation app that types at your cursor while you speak. It runs locally, keeps the model warm for low latency, and follows mixed-language sentences without uploading audio. Use it in any app—from notes and email to your terminal and coding agent.
+Speekium is an open-source macOS dictation app that types at your cursor while you speak. It runs locally, keeps the model warm for low latency, and follows mixed-language sentences without uploading audio. Use it in any app—from notes and email to your terminal and coding agent.
 
 ## Highlights
 
@@ -19,10 +15,10 @@ WhisprStream is an open-source macOS dictation app that types at your cursor whi
 - Custom vocabulary for names, technical terms, and jargon
 - Voice shortcuts that expand a spoken phrase into a URL, signature, address, reusable reply, or any text you type often
 - Bring your own compatible ASR model, including base or fine-tuned checkpoints
-- Non-streaming models can still produce a live preview: WhisprStream repeatedly re-reads the growing utterance and settles the stable words
+- Non-streaming models can still produce a live preview: Speekium repeatedly re-reads the growing utterance and settles the stable words
 - No account, server, or audio upload
 
-## Install WhisprStream
+## Install Speekium
 
 ### Requirements
 
@@ -32,7 +28,7 @@ WhisprStream is an open-source macOS dictation app that types at your cursor whi
 
 ### Download and first launch
 
-1. Open [GitHub Releases](https://github.com/Leo6Leo/whispr-stream/releases), download `WhisprStream-macos-arm64.zip` from the latest published release, extract it, and move **WhisprStream** to Applications.
+1. Open [GitHub Releases](https://github.com/JPtheJP/speekium/releases), download `Speekium-macos-arm64.zip` from the latest published release, extract it, and move **Speekium** to Applications.
 2. Open the app. Public builds are self-signed but not notarized, so the first launch may require **System Settings → Privacy & Security → Open Anyway**. Do not disable Gatekeeper.
 3. Follow Setup Guide to download the private speech engine. The app checks free space, verifies the archive, installs it in Application Support, and runs a health check before using it.
 4. Choose a speech model. Qwen3-ASR 0.6B is the recommended download at approximately 1.9 GB. Qwen3-ASR 1.7B is approximately 4.3 GB and is best suited to Macs with at least 16 GB of unified memory.
@@ -58,24 +54,24 @@ The developer setup remains:
 
 ```bash
 ./setup-mac.sh
-WhisprStream/build.sh
-open WhisprStream.app
+Speekium/build.sh
+open Speekium.app
 ```
 
 Source builds use the prepared local development engine and show **Development engine ready** in Settings. Open **Settings → Model** to download a model. To exercise the download UI without changing real runtime or model files, quit the app and launch it with:
 
 ```bash
-WHISPR_TEST_FIRST_RUN=1 WhisprStream.app/Contents/MacOS/WhisprStream
+SPEEKIUM_TEST_FIRST_RUN=1 Speekium.app/Contents/MacOS/Speekium
 ```
 
 Hold the Right Option key, speak, and release; the transcript is inserted into the active app.
 
 ## Open source and model flexibility
 
-WhisprStream is MIT licensed and designed to be inspected, adapted, and extended. The default app offers Qwen3-ASR models, but the ASR sidecar is replaceable: add a compatible local model or fine-tuned checkpoint and keep the rest of the dictation workflow. A model does not need native streaming support. WhisprStream can repeatedly transcribe the full utterance, preserve context across language switches, and turn stable output into a live stream.
+Speekium is MIT licensed and designed to be inspected, adapted, and extended. The default app offers Qwen3-ASR models, but the ASR sidecar is replaceable: add a compatible local model or fine-tuned checkpoint and keep the rest of the dictation workflow. A model does not need native streaming support. Speekium can repeatedly transcribe the full utterance, preserve context across language switches, and turn stable output into a live stream.
 
 The native Swift front end and Python ASR sidecar communicate locally over a small newline-delimited JSON protocol. See [HANDOFF.md](HANDOFF.md) for architecture notes and troubleshooting.
 
 ## License
 
-WhisprStream is available under the [MIT License](LICENSE).
+Speekium is available under the [MIT License](LICENSE).
