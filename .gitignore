@@ -18,3 +18,5 @@ models/
 Speekium/.build/
 # macOS
 .DS_Store
+assets/icon/AppIcon.iconset/
+assets/icon/icon-1024.png
