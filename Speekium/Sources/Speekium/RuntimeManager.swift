@@ -104,7 +104,7 @@ final class RuntimeManager: ObservableObject {
             guard simulatedRuntimeInstalled else { return nil }
             return developmentPythonURL
         }
-        if let override = ProcessInfo.processInfo.environment["SPEEKIUM_PYTHON"], isExecutable(override) {
+        if let override = overrideEnvironment.value("SPEEKIUM_PYTHON"), isExecutable(override) {
             return URL(fileURLWithPath: override)
         }
         let managed = runtimeDirectory.appendingPathComponent("bin/python3.12")
@@ -116,7 +116,7 @@ final class RuntimeManager: ObservableObject {
     var isDeveloperTestModeAvailable: Bool { DeveloperTestMode.isAvailable }
     var isUsingDevelopmentEngine: Bool {
         guard !developerTestMode else { return false }
-        if let override = ProcessInfo.processInfo.environment["SPEEKIUM_PYTHON"] {
+        if let override = overrideEnvironment.value("SPEEKIUM_PYTHON") {
             return isExecutable(override)
         }
         return isDevelopmentBuild && developmentPythonURL != nil
@@ -155,7 +155,7 @@ final class RuntimeManager: ObservableObject {
             phase = simulatedRuntimeInstalled && developmentPythonURL != nil ? .ready : .missing
             return
         }
-        if ProcessInfo.processInfo.environment["SPEEKIUM_PYTHON"].map(isExecutable) == true {
+        if let python = overrideEnvironment.value("SPEEKIUM_PYTHON"), isExecutable(python) {
             phase = .ready
             return
         }
@@ -371,13 +371,23 @@ final class RuntimeManager: ObservableObject {
         DeveloperTestMode.isEnabled
     }
 
+    /// Resolves the `SPEEKIUM_*` override variables, honoring them only in
+    /// development builds. All environment reads below flow through this so a
+    /// release can never be redirected by a poisoned launch environment.
+    private var overrideEnvironment: RuntimeEnvironment {
+        RuntimeEnvironment(
+            bundleIdentifier: Bundle.main.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String
+        )
+    }
+
     private var isDevelopmentBuild: Bool {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String ?? "").hasPrefix("dev.")
+        RuntimeEnvironment.isDevelopmentBundle(
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String
+        )
     }
 
     private var developmentPythonURL: URL? {
-        let environment = ProcessInfo.processInfo.environment
-        if let override = environment["SPEEKIUM_PYTHON"], isExecutable(override) {
+        if let override = overrideEnvironment.value("SPEEKIUM_PYTHON"), isExecutable(override) {
             return URL(fileURLWithPath: override)
         }
         if let developmentPath = Bundle.main.object(forInfoDictionaryKey: "SpeekiumDevelopmentPythonPath") as? String,
@@ -388,14 +398,14 @@ final class RuntimeManager: ObservableObject {
     }
 
     private var runtimeArchiveURL: URL? {
-        let value = ProcessInfo.processInfo.environment["SPEEKIUM_RUNTIME_URL"]
+        let value = overrideEnvironment.value("SPEEKIUM_RUNTIME_URL")
             ?? Bundle.main.object(forInfoDictionaryKey: "SpeekiumRuntimeURL") as? String
         guard let value, !value.isEmpty else { return nil }
         return URL(string: value)
     }
 
     private var expectedChecksum: String? {
-        let value = ProcessInfo.processInfo.environment["SPEEKIUM_RUNTIME_SHA256"]
+        let value = overrideEnvironment.value("SPEEKIUM_RUNTIME_SHA256")
             ?? Bundle.main.object(forInfoDictionaryKey: "SpeekiumRuntimeSHA256") as? String
         guard let value,
               value.range(of: "^[0-9a-fA-F]{64}$", options: .regularExpression) != nil else { return nil }
@@ -403,7 +413,7 @@ final class RuntimeManager: ObservableObject {
     }
 
     private var runtimeConfigurationVersion: String? {
-        let value = ProcessInfo.processInfo.environment["SPEEKIUM_RUNTIME_VERSION"]
+        let value = overrideEnvironment.value("SPEEKIUM_RUNTIME_VERSION")
             ?? Bundle.main.object(forInfoDictionaryKey: "SpeekiumRuntimeVersion") as? String
         return value?.isEmpty == false ? value : nil
     }
@@ -420,14 +430,14 @@ final class RuntimeManager: ObservableObject {
         case "SpeekiumRuntimeInstalledBytes": environmentKey = "SPEEKIUM_RUNTIME_INSTALLED_BYTES"
         default: environmentKey = ""
         }
-        let value = (environmentKey.isEmpty ? nil : ProcessInfo.processInfo.environment[environmentKey])
+        let value = (environmentKey.isEmpty ? nil : overrideEnvironment.value(environmentKey))
             ?? Bundle.main.object(forInfoDictionaryKey: key) as? String
         guard let value, let bytes = Int64(value), bytes > 0 else { return nil }
         return bytes
     }
 
     private var runtimeDirectory: URL {
-        if let override = ProcessInfo.processInfo.environment["SPEEKIUM_RUNTIME_DIRECTORY"], !override.isEmpty {
+        if let override = overrideEnvironment.value("SPEEKIUM_RUNTIME_DIRECTORY") {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

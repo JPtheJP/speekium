@@ -193,7 +193,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let root = Bundle.main.resourceURL ?? URL(fileURLWithPath: ".")
         let script = root.appendingPathComponent("asr_server.py")
 
-        let env = ProcessInfo.processInfo.environment
+        // Model/bits overrides feed the same privileged sidecar, so they honor
+        // the same development-only gate as the runtime overrides.
+        let overrides = RuntimeEnvironment(
+            bundleIdentifier: Bundle.main.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String
+        )
         guard let python = runtime.executableURL else {
             Log.write("no managed Python runtime")
             throw CocoaError(.fileNoSuchFile)
@@ -202,8 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ASRService(
             python: python,
             script: script,
-            model: env["SPEEKIUM_MODEL"] ?? settings.model.rawValue,
-            bits: Int(env["SPEEKIUM_BITS"] ?? "8") ?? 8,
+            model: overrides.value("SPEEKIUM_MODEL") ?? settings.model.rawValue,
+            bits: overrides.value("SPEEKIUM_BITS").flatMap { Int($0) } ?? 8,
             context: settings.asrContext,
             shortUtteranceLanguage: settings.shortUtteranceLanguage
         )

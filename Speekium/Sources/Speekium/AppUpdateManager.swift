@@ -72,7 +72,17 @@ final class AppUpdateManager: ObservableObject {
 
     func openAvailableRelease() {
         guard case let .available(release) = status else { return }
+        // Defense in depth: `fetchLatestRelease` already rejects an untrusted
+        // page URL, but never hand an unexpected scheme to NSWorkspace.
+        guard Self.isTrustedReleaseURL(release.pageURL) else { return }
         NSWorkspace.shared.open(release.pageURL)
+    }
+
+    /// A release page must be an `https://github.com` URL. The value is decoded
+    /// from a network response (`html_url`), so any other scheme (for example
+    /// `file:`) or host must never reach `NSWorkspace.open`.
+    nonisolated static func isTrustedReleaseURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host?.lowercased() == "github.com"
     }
 
     private static func fetchLatestRelease(for repository: String) async throws -> GitHubRelease {
@@ -90,6 +100,7 @@ final class AppUpdateManager: ObservableObject {
         }
         let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
         guard !release.draft, !release.prerelease else { throw UpdateError.noPublishedRelease }
+        guard isTrustedReleaseURL(release.pageURL) else { throw UpdateError.untrustedReleaseURL }
         return release
     }
 
@@ -115,6 +126,7 @@ final class AppUpdateManager: ObservableObject {
         case invalidVersion
         case noPublishedRelease
         case unavailable
+        case untrustedReleaseURL
 
         var errorDescription: String? {
             switch self {
@@ -122,6 +134,7 @@ final class AppUpdateManager: ObservableObject {
             case .invalidVersion: "The published release does not use a supported version number."
             case .noPublishedRelease: "There is no published update yet."
             case .unavailable: "Could not reach GitHub to check for updates."
+            case .untrustedReleaseURL: "The published release has an unexpected download location."
             }
         }
     }

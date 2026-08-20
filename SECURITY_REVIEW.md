@@ -19,15 +19,19 @@ The findings below are mostly **defense-in-depth hardening**. The one that deser
 fix is **F1** (environment overrides remain active in release builds, giving a local
 arbitrary-code-execution vector into a Microphone- and Accessibility-privileged process).
 
-| # | Severity | Finding |
-|---|----------|---------|
-| F1 | **Medium** | `SPEEKIUM_PYTHON` / `SPEEKIUM_RUNTIME_DIRECTORY` overrides honored in release builds → arbitrary sidecar executable |
-| F2 | Low | Update check opens an unvalidated URL scheme from a network response |
-| F3 | Low | Log file is world-readable (0644) and holds app/usage metadata |
-| F4 | Low | Transcript pasteboard + synthetic Cmd-C/Cmd-V is the app's largest privacy surface (by design) |
-| F5 | Info | Python health-check program assembled by string interpolation |
-| F6 | Info | `codesign --deep` in `build.sh` (deprecated) |
-| F7 | Info | Root-level Python prototypes live alongside shipped code |
+| # | Severity | Status | Finding |
+|---|----------|--------|---------|
+| F1 | **Medium** | ✅ Fixed | `SPEEKIUM_PYTHON` / `SPEEKIUM_RUNTIME_DIRECTORY` overrides honored in release builds → arbitrary sidecar executable |
+| F2 | Low | ✅ Fixed | Update check opens an unvalidated URL scheme from a network response |
+| F3 | Low | ✅ Fixed | Log file is world-readable (0644) and holds app/usage metadata |
+| F4 | Low | Open | Transcript pasteboard + synthetic Cmd-C/Cmd-V is the app's largest privacy surface (by design) |
+| F5 | Info | Open | Python health-check program assembled by string interpolation |
+| F6 | Info | Open | `codesign --deep` in `build.sh` (deprecated) |
+| F7 | Info | Open | Root-level Python prototypes live alongside shipped code |
+
+**F1–F3 were fixed** in the commit that follows this review; see the resolution notes
+on each finding and the regression coverage in
+[`SecurityHardeningTests.swift`](Speekium/Tests/SpeekiumTests/SecurityHardeningTests.swift).
 
 ---
 
@@ -60,6 +64,15 @@ already restricts the Info.plist dev path. In release, only the managed runtime 
 and the signed Info.plist values should be trusted. The `SPEEKIUM_MODEL` / `SPEEKIUM_BITS`
 overrides ([`SpeekiumApp.swift:205`](Speekium/Sources/Speekium/SpeekiumApp.swift:205)) are lower risk but belong on the same gate.
 
+**✅ Resolution.** Added [`RuntimeEnvironment`](Speekium/Sources/Speekium/RuntimeEnvironment.swift), a pure gate that returns an
+override value only when the bundle identifier is a `dev.` development build; a
+release fails closed (a nil identifier is treated as release). Every `SPEEKIUM_*`
+read in `RuntimeManager` and `SpeekiumApp.makeService` now flows through it, so a
+poisoned launch environment cannot redirect the sidecar executable, runtime
+location, download source, or model in a shipped build. Regression:
+`testReleaseBuildIgnoresEveryOverrideVariable`, `testDevelopmentBuildHonorsOverrideVariables`,
+`testMissingBundleIdentifierIsTreatedAsRelease`.
+
 ## F2 — Unvalidated URL scheme opened from a network response (Low)
 
 `AppUpdateManager.openAvailableRelease()` opens the release page with no scheme check:
@@ -75,6 +88,14 @@ so a non-`https` scheme (e.g. `file:`) opened via `NSWorkspace` is worth preclud
 **Recommendation.** Before opening, require `pageURL.scheme == "https"` (and ideally
 `host == "github.com"`); otherwise fall back to the repository's releases page.
 
+**✅ Resolution.** Added `AppUpdateManager.isTrustedReleaseURL` (requires scheme
+`https` and host `github.com`, case-insensitive). It is enforced both when the
+release is decoded (`fetchLatestRelease` throws `.untrustedReleaseURL` otherwise, so
+an untrusted URL never reaches `.available`) and again as a guard in
+`openAvailableRelease` before `NSWorkspace.open`. Regression:
+`testTrustedReleaseURLAcceptsGitHubHTTPS`, `testTrustedReleaseURLRejectsUnexpectedSchemesAndHosts`
+(covers `file:`, `javascript:`, plain `http`, and `github.com.evil.example` look-alikes).
+
 ## F3 — World-readable log with usage metadata (Low)
 
 - [`Log.swift:21`](Speekium/Sources/Speekium/Log.swift:21) and [`ASRService.swift:67`](Speekium/Sources/Speekium/ASRService.swift:67) create `~/Library/Logs/Speekium.log` with default 0644 perms.
@@ -84,6 +105,13 @@ frontmost app's bundle id, and Accessibility trust state — good discipline). S
 multi-user Mac those entries plus raw sidecar stderr are readable by other local accounts.
 
 **Recommendation.** Create the file `0600`, and consider size-capping/rotating it.
+
+**✅ Resolution.** Both creators now route through `Log.ensureSecureLogFile`, which
+creates the log `0600` and tightens a file left `0644` by an earlier version
+(`perms & 0o077 != 0`). `ASRService`'s duplicate `logURL`/creation was removed in
+favor of the shared helper. Regression: `testEnsureSecureLogFileCreatesOwnerOnlyFile`,
+`testEnsureSecureLogFileTightensAWorldReadableFile`. (Size-capping/rotation is still
+open.)
 
 ## F4 — Transcript pasteboard + synthetic input is the main privacy surface (Low, by design)
 

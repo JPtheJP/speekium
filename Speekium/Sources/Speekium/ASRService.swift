@@ -53,19 +53,10 @@ final class ASRService {
         ])
     }
 
-    /// ~/Library/Logs/Speekium.log — where sidecar stderr goes.
-    static var logURL: URL {
-        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Logs")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("Speekium.log")
-    }
-
+    /// Sidecar stderr is appended to the same owner-only ~/Library/Logs/Speekium.log
+    /// used by `Log`.
     private static func makeLogHandle() -> FileHandle? {
-        let url = logURL
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
+        let url = Log.ensureSecureLogFile()
         guard let handle = try? FileHandle(forWritingTo: url) else { return nil }
         handle.seekToEndOfFile()
         return handle
