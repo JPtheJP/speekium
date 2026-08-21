@@ -185,6 +185,12 @@ final class Settings: ObservableObject {
         }
     }
 
+    /// Pause playing music/podcasts while the mic is open, then resume. Avoids
+    /// the Bluetooth stereo→call-quality drop that opening the mic triggers.
+    @Published var pauseMediaWhileDictating: Bool {
+        didSet { defaults.set(pauseMediaWhileDictating, forKey: Keys.pauseMediaWhileDictating) }
+    }
+
     @Published var playSound: Bool {
         didSet { defaults.set(playSound, forKey: Keys.playSound) }
     }
@@ -368,6 +374,7 @@ final class Settings: ObservableObject {
         static let usePunctuation = "usePunctuation"
         static let contextAwareCapitalization = "contextAwareCapitalization"
         static let shortUtteranceLanguage = "shortUtteranceLanguage"
+        static let pauseMediaWhileDictating = "pauseMediaWhileDictating"
         static let playSound = "playSound"
         static let insertSound = "insertSound"   // pre-pairs; read once to migrate
         static let soundTheme = "soundTheme"
@@ -393,6 +400,7 @@ final class Settings: ObservableObject {
         shortUtteranceLanguage = ShortUtteranceLanguage(
             rawValue: defaults.string(forKey: Keys.shortUtteranceLanguage) ?? ""
         ) ?? .smartEnglishChinese
+        pauseMediaWhileDictating = defaults.object(forKey: Keys.pauseMediaWhileDictating) as? Bool ?? true
         playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? false
         // Migration: before pairs, the choice lived in `insertSound` as a bare
         // alert-sound name. Carry it over so an existing setting is preserved

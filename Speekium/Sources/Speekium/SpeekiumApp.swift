@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: HUDPanel!
     private var statusItem: NSStatusItem!
     private let capture = AudioCapture()
+    private let media = MediaController(isEnabled: { Settings.shared.pauseMediaWhileDictating })
     private var hotkey: HotKeyMonitor!
     private var asr: ASRService!
     private var dismissWork: DispatchWorkItem?
@@ -225,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the Settings window instead.
         if state.phase == .listening {
             capture.stop()
+            media.resumeAfterDictation()
             state.stopDictationTimer()
             state.level = 0
             dismissNow()
@@ -329,6 +331,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.startDictationTimer()
         panel.present()
 
+        // Pause playing music before the mic opens so Bluetooth stays in stereo
+        // and nothing plays through the call-quality window.
+        media.pauseForDictation()
         settings.playStart()
         let shortLanguage = ShortUtteranceLanguageResolver.modelLanguage(
             for: settings.shortUtteranceLanguage,
@@ -345,6 +350,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func endDictation() {
         guard state.phase == .listening else { return }
         capture.stop()
+        // Mic is closed; resume whatever we paused (Bluetooth returns to stereo).
+        media.resumeAfterDictation()
         state.stopDictationTimer()
         state.level = 0
         state.phase = .thinking
@@ -421,6 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case let .error(message):
             precedingTextAtDictationStart = nil
+            media.resumeAfterDictation()
             if !isASRReady {
                 speechEngineStartupWork?.cancel()
                 speechEngineStartupWork = nil
@@ -438,6 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case let .terminated(message):
             precedingTextAtDictationStart = nil
+            media.resumeAfterDictation()
             speechEngineStartupWork?.cancel()
             speechEngineStartupWork = nil
             speechEngineStartedAt = nil
