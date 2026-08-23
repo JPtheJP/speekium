@@ -18,6 +18,11 @@ RUNTIME_VERSION="${RUNTIME_VERSION:-}"
 RUNTIME_ARCHIVE_BYTES="${RUNTIME_ARCHIVE_BYTES:-}"
 RUNTIME_INSTALLED_BYTES="${RUNTIME_INSTALLED_BYTES:-}"
 UPDATE_REPOSITORY="${UPDATE_REPOSITORY:-Leo6Leo/whispr-stream}"
+UPDATE_PUBLIC_KEY_FILE="$PROJECT_ROOT/WhisprStream/update-public-key.txt"
+UPDATE_PUBLIC_KEY="${UPDATE_PUBLIC_KEY:-}"
+if [ -z "$UPDATE_PUBLIC_KEY" ] && [ -f "$UPDATE_PUBLIC_KEY_FILE" ]; then
+    UPDATE_PUBLIC_KEY="$(tr -d '\r\n' < "$UPDATE_PUBLIC_KEY_FILE")"
+fi
 BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-dev.local.whisprstream}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 
@@ -42,6 +47,11 @@ if [ "$RELEASE" = "1" ]; then
     fi
     if [ "$BUNDLE_IDENTIFIER" != "com.leoleo.whisprstream" ]; then
         echo "error: release builds require bundle identifier com.leoleo.whisprstream" >&2
+        exit 1
+    fi
+    if ! [[ "$UPDATE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+        || ! [[ "$UPDATE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+        echo "error: release builds require a valid update repository and Ed25519 public key" >&2
         exit 1
     fi
     if [ -z "$SIGNING_IDENTITY" ] || [ "$SIGNING_IDENTITY" = "-" ]; then
@@ -77,13 +87,18 @@ else
 fi
 
 BIN=".build/release/WhisprStream"
+UPDATE_INSTALLER=".build/release/WhisprStreamUpdateInstaller"
+UPDATE_SIGNER=".build/release/WhisprStreamUpdateSigner"
 [ -x "$BIN" ] || { echo "error: build produced no binary" >&2; exit 1; }
+[ -x "$UPDATE_INSTALLER" ] || { echo "error: build produced no update installer" >&2; exit 1; }
+[ -x "$UPDATE_SIGNER" ] || { echo "error: build produced no update signer" >&2; exit 1; }
 
 echo "▸ assembling $(basename "$APP")"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 
 cp "$BIN" "$APP/Contents/MacOS/WhisprStream"
+cp "$UPDATE_INSTALLER" "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
 cp Resources/asr_server.py "$APP/Contents/Resources/"
 cp Resources/model_download.py "$APP/Contents/Resources/"
 cp "$PROJECT_ROOT/asr_engine.py" "$APP/Contents/Resources/"
@@ -92,10 +107,15 @@ if [ "$RELEASE" = "1" ]; then
     # The linker records absolute object-file paths as N_OSO debug symbols;
     # remove those records after source paths have been remapped above.
     strip -S "$APP/Contents/MacOS/WhisprStream"
-    if rg -a -q '(/Users/|/home/)' "$APP/Contents/MacOS/WhisprStream"; then
-        echo "error: release executable contains a build-machine home path" >&2
-        exit 1
-    fi
+    strip -S "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
+    for EXECUTABLE in \
+        "$APP/Contents/MacOS/WhisprStream" \
+        "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"; do
+        if rg -a -q '(/Users/|/home/)' "$EXECUTABLE"; then
+            echo "error: release executable contains a build-machine home path" >&2
+            exit 1
+        fi
+    done
 fi
 
 # Designed start/finish sounds. Regenerate with sound-design/render_sounds.py.
@@ -130,6 +150,7 @@ $DEVELOPMENT_PYTHON_PLIST
     <key>WhisprRuntimeArchiveBytes</key><string>$RUNTIME_ARCHIVE_BYTES</string>
     <key>WhisprRuntimeInstalledBytes</key><string>$RUNTIME_INSTALLED_BYTES</string>
     <key>WhisprUpdateRepository</key><string>$UPDATE_REPOSITORY</string>
+    <key>WhisprUpdatePublicKey</key><string>$UPDATE_PUBLIC_KEY</string>
 </dict>
 </plist>
 PLIST
@@ -156,6 +177,13 @@ else
     fi
 fi
 
+if [ "$RELEASE" = "1" ]; then
+    # A stable code identity lets this release-only tool retain access to the
+    # same login-Keychain signing key across rebuilds.
+    codesign --force --sign "$IDENTITY" "$UPDATE_SIGNER"
+    codesign --verify --strict "$UPDATE_SIGNER"
+fi
+codesign --force --sign "$IDENTITY" "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
 codesign --force --deep --sign "$IDENTITY" "$APP"
 if [ "$RELEASE" = "1" ]; then
     codesign --verify --strict --deep "$APP"

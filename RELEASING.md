@@ -21,6 +21,33 @@ Create the runtime release asset as `WhisprStream-runtime-1.0.0-arm64.zip` and r
 
 The app must embed an immutable tag-specific runtime URL, never `latest/download`:
 
+The updater's Ed25519 private key lives only in the macOS login Keychain. Its
+public key is checked in at `WhisprStream/update-public-key.txt` and embedded in
+every build. Generate the key only once; subsequent invocations print the same
+public key:
+
+```bash
+swift build -c release --package-path WhisprStream \
+  --product WhisprStreamUpdateSigner
+codesign --force --sign "WhisprStream Self-Signed" \
+  WhisprStream/.build/release/WhisprStreamUpdateSigner
+WhisprStream/.build/release/WhisprStreamUpdateSigner generate
+```
+
+Always use the stably signed release tool for `generate`, `export`, and `sign`.
+Its code identity is what allows macOS Keychain access to survive later tool
+rebuilds; do not create the production key with an ad-hoc debug executable.
+
+Back up the private key to encrypted offline storage, never to this repository:
+
+```bash
+WhisprStream/.build/release/WhisprStreamUpdateSigner export \
+  /path/outside/the/repository/WhisprStream-update-private-key.txt
+```
+
+Losing both the Keychain item and its backup breaks the automatic-update chain
+for installed versions. Do not rotate this key as part of a normal release.
+
 App version `1.0.1` intentionally reuses runtime version `1.0.0`; the runtime
 version changes only when the standalone Python or dependency payload changes.
 
@@ -37,22 +64,29 @@ WhisprStream/build.sh
 ```
 
 `RELEASE=1` fails if any runtime value is missing, malformed, zero, non-HTTPS, or if the bundle identifier is not `com.leoleo.whisprstream`. It also fails without a signing identity; it never silently falls back to ad-hoc signing. Release compilation remaps the repository root to `/src`, strips linker-generated `N_OSO` debug records, and both the builder and validator reject executables containing `/Users/` or `/home/` build-machine paths.
+The same release identity is also applied to the update-signing utility so it
+can reuse the protected Keychain item when the utility is rebuilt.
 
 Archive the app with macOS metadata preserved:
 
 ```bash
 ditto -c -k --sequesterRsrc --keepParent \
   WhisprStream.app WhisprStream-macos-arm64.zip
+WhisprStream/.build/release/WhisprStreamUpdateSigner sign \
+  WhisprStream-macos-arm64.zip WhisprStream-macos-arm64.zip.ed25519
 ```
 
-Create `SHA256SUMS` for both assets and run the read-only validator. The
-validator extracts the app with macOS metadata preserved and rejects an
-unexpected app version or build number:
+Create `SHA256SUMS` for all three artifacts and run the read-only validator.
+The validator checks the detached update signature, extracts the app with macOS
+metadata preserved, and rejects an unexpected app version or build number:
 
 ```bash
-shasum -a 256 WhisprStream-macos-arm64.zip WhisprStream-runtime-1.0.0-arm64.zip > SHA256SUMS
+shasum -a 256 WhisprStream-macos-arm64.zip \
+  WhisprStream-macos-arm64.zip.ed25519 \
+  WhisprStream-runtime-1.0.0-arm64.zip > SHA256SUMS
 WhisprStream/validate-release.sh WhisprStream-macos-arm64.zip \
-  WhisprStream-runtime-1.0.0-arm64.zip SHA256SUMS 1.0.1 2
+  WhisprStream-runtime-1.0.0-arm64.zip SHA256SUMS \
+  WhisprStream-macos-arm64.zip.ed25519 1.0.1 2
 ```
 
 ## 3. Stable self-signing
@@ -66,6 +100,7 @@ Self-signing does not provide Apple trust, does not notarize the app, and does n
 For this release, create a draft GitHub Release tagged `v1.0.1`, upload:
 
 - `WhisprStream-macos-arm64.zip`
+- `WhisprStream-macos-arm64.zip.ed25519`
 - `WhisprStream-runtime-1.0.0-arm64.zip`
 - `SHA256SUMS`
 
@@ -83,7 +118,7 @@ Record failure-state screenshots and logs. Verify that an app replacement preser
 
 Confirm the website's download link resolves to the stable app asset and that all source links resolve to [github.com/Leo6Leo/whispr-stream](https://github.com/Leo6Leo/whispr-stream). The website must not advertise a Homebrew command until a real Cask exists.
 
-In Settings → About, confirm that the update checker accepts exact stable semantic versions such as `v1.0.1`, ignores drafts and prereleases, and opens the release page without modifying the running app.
+In Settings → About, confirm that the update checker accepts exact stable semantic versions such as `v1.0.1`, ignores drafts and prereleases, rejects missing, oversized, duplicate, or incorrectly signed assets, and offers **Install and Relaunch** only after discovering both exact update assets. Test a valid signed update end to end from a writable copy in Applications, including relaunch after a quarantined download, plus tampered-signature and read-only-location failures. Quarantine is cleared only from a replacement that has passed the pinned Ed25519 signature and bundle checks. The manual GitHub button must remain available as recovery.
 
 ## Local developer test mode
 

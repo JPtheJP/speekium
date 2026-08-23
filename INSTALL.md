@@ -37,7 +37,7 @@ WhisprStream runs in the menu bar rather than the Dock. Choose **Setup Guide…*
 
 ## Updates
 
-In **Settings → About**, choose **Check for Updates**. **Download Update…** opens the stable GitHub Release page. Download the new app ZIP, replace the app in Applications, and launch it. The runtime, models, settings, vocabulary, and shortcuts remain in your user Library.
+In **Settings → About**, choose **Check for Updates**. When a stable update is available, **Install and Relaunch** downloads the app ZIP, verifies its Ed25519 release signature, replaces the installed app, and reopens it. If WhisprStream is running from a read-only location, move it to Applications and try again or use **Open GitHub Releases…** for a manual replacement. The runtime, models, settings, vocabulary, and shortcuts remain in your user Library.
 
 ## Uninstall
 

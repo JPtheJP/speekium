@@ -45,7 +45,7 @@ The native app, speech engine, and model are separate. The engine and model are 
 - If an engine installation fails, open **Settings → Engine** and use **Install** or **Repair / Reinstall**. This replaces only the managed engine.
 - If a model download is interrupted, open **Settings → Model** and choose **Clear Partial Data**. Cleanup is limited to unfinished files for that model; installed models and settings are untouched.
 - A cancelled or crashed model download releases its lock automatically, so stale state cannot permanently block cleanup.
-- **Settings → About → Check for Updates** opens the latest stable release when an update is available. Replacing the app preserves the engine, model cache, preferences, vocabulary, and shortcuts.
+- **Settings → About → Check for Updates** downloads, verifies, installs, and relaunches stable updates in place. If the app is running from a read-only location, the same screen offers the GitHub Release page instead. The engine, model cache, preferences, vocabulary, and shortcuts are preserved.
 
 ### Build from source
 

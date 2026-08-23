@@ -1,0 +1,315 @@
+import CryptoKit
+import XCTest
+@testable import WhisprStream
+
+final class AppUpdateManagerTests: XCTestCase {
+    private let releasePage = URL(string: "https://github.com/Leo6Leo/whispr-stream/releases/tag/v1.0.2")!
+
+    private func asset(_ name: String, size: Int64 = 100) -> GitHubRelease.Asset {
+        GitHubRelease.Asset(
+            name: name,
+            downloadURL: URL(
+                string: "https://github.com/Leo6Leo/whispr-stream/releases/download/v1.0.2/\(name)"
+            )!,
+            size: size
+        )
+    }
+
+    private func release(
+        tag: String = "v1.0.2",
+        assets: [GitHubRelease.Asset]? = nil
+    ) -> GitHubRelease {
+        GitHubRelease(
+            tagName: tag,
+            pageURL: releasePage,
+            draft: false,
+            prerelease: false,
+            assets: assets ?? [
+                asset(AppUpdateManager.archiveAssetName),
+                asset(AppUpdateManager.signatureAssetName),
+            ]
+        )
+    }
+
+    func testSelectsExactSignedAssetsForNewerStableRelease() throws {
+        let update = try XCTUnwrap(
+            AppUpdateManager.release(from: release(), currentVersion: "1.0.1")
+        )
+
+        XCTAssertEqual(update.version, "1.0.2")
+        XCTAssertEqual(update.archiveBytes, 100)
+        XCTAssertEqual(update.archiveURL.lastPathComponent, AppUpdateManager.archiveAssetName)
+        XCTAssertEqual(update.signatureURL.lastPathComponent, AppUpdateManager.signatureAssetName)
+        XCTAssertNil(try AppUpdateManager.release(from: release(), currentVersion: "1.0.2"))
+    }
+
+    func testRejectsMissingDuplicateOversizedAndNonGitHubAssets() {
+        XCTAssertThrowsError(
+            try AppUpdateManager.release(
+                from: release(assets: [asset(AppUpdateManager.archiveAssetName)]),
+                currentVersion: "1.0.1"
+            )
+        )
+        XCTAssertThrowsError(
+            try AppUpdateManager.release(
+                from: release(assets: [
+                    asset(AppUpdateManager.archiveAssetName),
+                    asset(AppUpdateManager.archiveAssetName),
+                    asset(AppUpdateManager.signatureAssetName),
+                ]),
+                currentVersion: "1.0.1"
+            )
+        )
+        XCTAssertThrowsError(
+            try AppUpdateManager.release(
+                from: release(assets: [
+                    asset(
+                        AppUpdateManager.archiveAssetName,
+                        size: AppUpdateManager.maximumArchiveBytes + 1
+                    ),
+                    asset(AppUpdateManager.signatureAssetName),
+                ]),
+                currentVersion: "1.0.1"
+            )
+        )
+
+        let external = GitHubRelease.Asset(
+            name: AppUpdateManager.archiveAssetName,
+            downloadURL: URL(string: "https://example.com/update.zip")!,
+            size: 100
+        )
+        XCTAssertThrowsError(
+            try AppUpdateManager.release(
+                from: release(assets: [external, asset(AppUpdateManager.signatureAssetName)]),
+                currentVersion: "1.0.1"
+            )
+        )
+    }
+
+    func testEd25519SignatureAcceptsExactArchiveAndRejectsTampering() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WhisprStreamUpdateTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let archive = directory.appendingPathComponent("update.zip")
+        let archiveData = Data("signed update".utf8)
+        try archiveData.write(to: archive)
+        let privateKey = Curve25519.Signing.PrivateKey()
+        let signature = try privateKey.signature(for: archiveData).base64EncodedString()
+        let publicKey = privateKey.publicKey.rawRepresentation.base64EncodedString()
+
+        XCTAssertNoThrow(try AppUpdateManager.verifySignature(
+            archive: archive,
+            signatureData: Data((signature + "\n").utf8),
+            publicKey: publicKey
+        ))
+
+        try Data("tampered update".utf8).write(to: archive)
+        XCTAssertThrowsError(try AppUpdateManager.verifySignature(
+            archive: archive,
+            signatureData: Data(signature.utf8),
+            publicKey: publicKey
+        ))
+        XCTAssertThrowsError(try AppUpdateManager.verifySignature(
+            archive: archive,
+            signatureData: Data("not-base64".utf8),
+            publicKey: publicKey
+        ))
+    }
+
+    func testReplacementBundleMustKeepIdentityVersionKeyAndExecutable() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WhisprStreamBundleTests-\(UUID().uuidString)")
+        let app = directory.appendingPathComponent("WhisprStream.app")
+        let contents = app.appendingPathComponent("Contents")
+        let macOS = contents.appendingPathComponent("MacOS")
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "com.leoleo.whisprstream",
+            "CFBundleShortVersionString": "1.0.2",
+            "CFBundleVersion": "3",
+            "CFBundlePackageType": "APPL",
+            "CFBundleExecutable": "WhisprStream",
+            "LSMinimumSystemVersion": "14.0",
+            "WhisprUpdatePublicKey": key,
+        ]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        let executable = macOS.appendingPathComponent("WhisprStream")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        XCTAssertNoThrow(try AppUpdateManager.validateReplacementBundle(
+            at: app,
+            expectedBundleIdentifier: "com.leoleo.whisprstream",
+            expectedVersion: "1.0.2",
+            expectedPublicKey: key
+        ))
+        XCTAssertThrowsError(try AppUpdateManager.validateReplacementBundle(
+            at: app,
+            expectedBundleIdentifier: "com.attacker.fake",
+            expectedVersion: "1.0.2",
+            expectedPublicKey: key
+        ))
+        XCTAssertThrowsError(try AppUpdateManager.validateReplacementBundle(
+            at: app,
+            expectedBundleIdentifier: "com.leoleo.whisprstream",
+            expectedVersion: "9.9.9",
+            expectedPublicKey: key
+        ))
+    }
+
+    func testPublicKeyValidationRequiresOneEd25519Key() {
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        XCTAssertTrue(AppUpdateManager.isValidPublicKey(key))
+        XCTAssertFalse(AppUpdateManager.isValidPublicKey(nil))
+        XCTAssertFalse(AppUpdateManager.isValidPublicKey(Data(repeating: 0, count: 31).base64EncodedString()))
+        XCTAssertFalse(AppUpdateManager.isValidPublicKey("not-base64"))
+    }
+
+    func testDownloadVerifiesExtractsAndValidatesReplacement() async throws {
+        let manager = FileManager.default
+        let directory = manager.temporaryDirectory
+            .appendingPathComponent("WhisprStreamDownloadTests-\(UUID().uuidString)")
+        let source = directory.appendingPathComponent("source")
+        let app = source.appendingPathComponent("WhisprStream.app")
+        let contents = app.appendingPathComponent("Contents")
+        let macOS = contents.appendingPathComponent("MacOS")
+        try manager.createDirectory(at: macOS, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: directory) }
+
+        let privateKey = Curve25519.Signing.PrivateKey()
+        let publicKey = privateKey.publicKey.rawRepresentation.base64EncodedString()
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "com.leoleo.whisprstream",
+            "CFBundleShortVersionString": "1.0.2",
+            "CFBundleVersion": "3",
+            "CFBundlePackageType": "APPL",
+            "CFBundleExecutable": "WhisprStream",
+            "LSMinimumSystemVersion": "14.0",
+            "WhisprUpdatePublicKey": publicKey,
+        ]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        let executable = macOS.appendingPathComponent("WhisprStream")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        let archive = directory.appendingPathComponent("update.zip")
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-c", "-k", "--keepParent", app.path, archive.path]
+        try ditto.run()
+        ditto.waitUntilExit()
+        XCTAssertEqual(ditto.terminationStatus, 0)
+
+        let archiveData = try Data(contentsOf: archive)
+        let signature = try privateKey.signature(for: archiveData).base64EncodedString()
+        let archiveURL = URL(string: "https://github.com/example/update.zip")!
+        let signatureURL = URL(string: "https://github.com/example/update.zip.ed25519")!
+        MockUpdateURLProtocol.responses = [
+            archiveURL: archiveData,
+            signatureURL: Data((signature + "\n").utf8),
+        ]
+        defer { MockUpdateURLProtocol.responses = [:] }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockUpdateURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let release = AppUpdateManager.Release(
+            version: "1.0.2",
+            pageURL: releasePage,
+            archiveURL: archiveURL,
+            signatureURL: signatureURL,
+            archiveBytes: Int64(archiveData.count)
+        )
+
+        let prepared = try await AppUpdateManager.downloadAndPrepare(
+            release: release,
+            publicKey: publicKey,
+            expectedBundleIdentifier: "com.leoleo.whisprstream",
+            session: session
+        )
+        defer { try? manager.removeItem(at: prepared.root) }
+
+        XCTAssertEqual(Bundle(url: prepared.app)?.bundleIdentifier, "com.leoleo.whisprstream")
+        XCTAssertEqual(
+            Bundle(url: prepared.app)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            "1.0.2"
+        )
+    }
+
+    func testReplacementRejectsAnUnsupportedMinimumSystemVersion() {
+        let current = OperatingSystemVersion(majorVersion: 14, minorVersion: 6, patchVersion: 1)
+        XCTAssertTrue(AppUpdateManager.supports(minimumSystemVersion: "14.0", currentOS: current))
+        XCTAssertTrue(AppUpdateManager.supports(minimumSystemVersion: "14.6.1", currentOS: current))
+        XCTAssertFalse(AppUpdateManager.supports(minimumSystemVersion: "15.0", currentOS: current))
+        XCTAssertFalse(AppUpdateManager.supports(minimumSystemVersion: "latest", currentOS: current))
+    }
+
+    func testQuarantineIsClearedOnlyFromPreparedBundleTree() throws {
+        let manager = FileManager.default
+        let directory = manager.temporaryDirectory
+            .appendingPathComponent("WhisprStreamQuarantineTests-\(UUID().uuidString)")
+        let app = directory.appendingPathComponent("WhisprStream.app")
+        let executable = app.appendingPathComponent("Contents/MacOS/WhisprStream")
+        try manager.createDirectory(
+            at: executable.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("test".utf8).write(to: executable)
+        defer { try? manager.removeItem(at: directory) }
+
+        XCTAssertEqual(try xattr(["-w", "com.apple.quarantine", "0081;test", app.path]), 0)
+        XCTAssertEqual(
+            try xattr(["-w", "com.apple.quarantine", "0081;test", executable.path]),
+            0
+        )
+        XCTAssertEqual(try xattr(["-p", "com.apple.quarantine", app.path]), 0)
+        XCTAssertEqual(try xattr(["-p", "com.apple.quarantine", executable.path]), 0)
+
+        try AppUpdateManager.clearQuarantineRecursively(at: app)
+
+        XCTAssertNotEqual(try xattr(["-p", "com.apple.quarantine", app.path]), 0)
+        XCTAssertNotEqual(try xattr(["-p", "com.apple.quarantine", executable.path]), 0)
+    }
+
+    private func xattr(_ arguments: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+}
+
+private final class MockUpdateURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var responses: [URL: Data] = [:]
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url, let data = Self.responses[url],
+              let response = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Length": String(data.count)]
+              ) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.fileDoesNotExist))
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}

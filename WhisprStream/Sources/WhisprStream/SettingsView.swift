@@ -603,7 +603,7 @@ private struct AboutTab: View {
             VStack(spacing: 6) {
                 detail("Speech model", "\(settings.model.label) · 8-bit")
                 detail("Runtime", "MLX on Apple Silicon")
-                detail("Network", "None — audio never leaves this Mac")
+                detail("Audio", "Never uploaded")
             }
             .padding(.top, 4)
 
@@ -630,7 +630,9 @@ private struct AboutTab: View {
     private var updateSection: some View {
         VStack(spacing: 7) {
             switch updates.status {
-            case .idle, .checking:
+            case .idle:
+                Button("Check for Updates", action: updates.checkForUpdates)
+            case .checking:
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text("Checking for updates…")
@@ -641,21 +643,51 @@ private struct AboutTab: View {
                 Label("WhisprStream is up to date", systemImage: "checkmark.circle.fill")
                     .font(.callout)
                     .foregroundStyle(.green)
+                Button("Check Again", action: updates.checkForUpdates)
+                    .buttonStyle(.link)
+                    .font(.caption)
             case let .available(release):
                 VStack(spacing: 6) {
                     Text("Version \(release.version) is available")
                         .font(.callout.weight(.medium))
-                    Button("Download Update…", action: updates.openAvailableRelease)
+                    Button("Install and Relaunch", action: updates.installAvailableUpdate)
+                    Button("View on GitHub…", action: updates.openAvailableRelease)
+                        .buttonStyle(.link)
+                        .font(.caption)
                     Button("Check Again", action: updates.checkForUpdates)
                         .buttonStyle(.link)
                         .font(.caption)
                 }
+            case let .downloading(release):
+                VStack(spacing: 6) {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Downloading version \(release.version)…")
+                    }
+                    Button("Cancel", action: updates.cancelUpdate)
+                        .buttonStyle(.link)
+                        .font(.caption)
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            case let .installing(release):
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Installing version \(release.version)…")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
             case let .failed(message):
                 VStack(spacing: 5) {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Check for Updates", action: updates.checkForUpdates)
+                    if updates.canOpenReleasePage {
+                        Button("Open GitHub Releases…", action: updates.openAvailableRelease)
+                            .buttonStyle(.link)
+                            .font(.caption)
+                    }
                 }
             }
         }
