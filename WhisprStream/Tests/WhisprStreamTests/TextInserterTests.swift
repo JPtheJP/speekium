@@ -69,4 +69,20 @@ final class TextInserterTests: XCTestCase {
             )
         )
     }
+
+    func testSuccessfulKeyboardCopyCollapsesSelectionBackToCaret() {
+        XCTAssertTrue(
+            TextInserter.shouldCollapseKeyboardSelection(
+                pasteboardChanged: true
+            )
+        )
+    }
+
+    func testUnavailableKeyboardCopyDoesNotAdvanceEmptyLineCaret() {
+        XCTAssertFalse(
+            TextInserter.shouldCollapseKeyboardSelection(
+                pasteboardChanged: false
+            )
+        )
+    }
 }

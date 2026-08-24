@@ -234,9 +234,17 @@ enum TextInserter {
                     after: prefixProbeCount,
                     timeout: 0.5
                 ) { changed, copiedText in
-                    // Collapse the selection unconditionally. A copy timeout
-                    // does not prove that the selection shortcut was ignored.
-                    pressKey(124, targetProcessID: targetProcessID) // Right Arrow
+                    // A pasteboard change proves the selection-and-copy
+                    // shortcut succeeded, so Right Arrow safely collapses the
+                    // selection back to the original caret. With no change,
+                    // there may be no selection at all (notably on an empty
+                    // Google Docs bullet); a naked Right Arrow would advance
+                    // the caret into the next list paragraph.
+                    if shouldCollapseKeyboardSelection(
+                        pasteboardChanged: changed
+                    ) {
+                        pressKey(124, targetProcessID: targetProcessID) // Right Arrow
+                    }
 
                     // Leave time for the caret event and any timed-out copy to
                     // settle before restoring the clipboard and permitting the
@@ -256,6 +264,14 @@ enum TextInserter {
                 }
             }
         }
+    }
+
+    /// Kept as a pure decision so the empty-line caret regression remains
+    /// covered without synthesizing global keyboard events in a unit test.
+    static func shouldCollapseKeyboardSelection(
+        pasteboardChanged: Bool
+    ) -> Bool {
+        pasteboardChanged
     }
 
     private static func waitForPasteboardChange(
