@@ -29,13 +29,14 @@ final class InstallationReleaseTests: XCTestCase {
             pythonVersion: "3.12.12",
             architecture: "arm64",
             minimumMacOS: "14.0",
-            dependencySet: "mlx-qwen3-asr-0.3.5",
+            dependencySet: "mlx-qwen3-asr-0.3.5+mlx-whisper-0.4.3",
             payloadBytes: 100,
             dependencyVersions: [
                 "mlx": "0.29.4",
                 "numpy": "2.5.1",
                 "huggingface-hub": "1.26.0",
                 "mlx-qwen3-asr": "0.3.5",
+                "mlx-whisper": "0.4.3",
             ]
         )
         let current = OperatingSystemVersion(majorVersion: 14, minorVersion: 0, patchVersion: 0)
@@ -57,6 +58,46 @@ final class InstallationReleaseTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(RuntimeManifest.self, from: data), manifest)
     }
 
+    func testPublicRuntimeDoesNotRequireOptionalModelDependencies() {
+        let manifest = RuntimeManifest(
+            runtimeVersion: "1.0.0",
+            pythonVersion: "3.12.12",
+            architecture: "arm64",
+            minimumMacOS: "14.0",
+            dependencySet: "mlx-qwen3-asr-0.3.5",
+            payloadBytes: 100,
+            dependencyVersions: [
+                "mlx": "0.29.4",
+                "numpy": "2.5.1",
+                "huggingface-hub": "1.26.0",
+                "mlx-qwen3-asr": "0.3.5",
+            ]
+        )
+        let current = OperatingSystemVersion(majorVersion: 14, minorVersion: 0, patchVersion: 0)
+
+        XCTAssertNil(manifest.compatibilityError(
+            requiredRuntimeVersion: "1.0.0",
+            currentOS: current,
+            includeOptionalModels: false
+        ))
+        XCTAssertNotNil(manifest.compatibilityError(
+            requiredRuntimeVersion: "1.0.0",
+            currentOS: current,
+            includeOptionalModels: true
+        ))
+    }
+
+    func testCompileTimeOptionalModelGateMatchesRuntimeRequirements() {
+        let requirements = FeatureFlags.requiredRuntimeModules()
+        #if DEBUG || WHISPR_ENABLE_OPTIONAL_MODELS
+        XCTAssertTrue(FeatureFlags.optionalModelsEnabled)
+        XCTAssertEqual(requirements["mlx_whisper"], "mlx-whisper")
+        #else
+        XCTAssertFalse(FeatureFlags.optionalModelsEnabled)
+        XCTAssertNil(requirements["mlx_whisper"])
+        #endif
+    }
+
     func testPythonEnvironmentRemovesHostileOverridesAndPreservesIntentionalSettings() {
         let environment = PythonProcessEnvironment.sanitized(base: [
             "PYTHONPATH": "/tmp/poison",
@@ -73,6 +114,7 @@ final class InstallationReleaseTests: XCTestCase {
         XCTAssertNil(environment["PYTHONHOME"])
         XCTAssertNil(environment["VIRTUAL_ENV"])
         XCTAssertNil(environment["DYLD_LIBRARY_PATH"])
+        XCTAssertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
         XCTAssertEqual(environment["PYTHONNOUSERSITE"], "1")
         XCTAssertEqual(environment["PYTHONUNBUFFERED"], "1")
         XCTAssertEqual(environment["HF_HUB_CACHE"], "/tmp/hf/hub")
@@ -84,7 +126,7 @@ final class InstallationReleaseTests: XCTestCase {
         let script = URL(fileURLWithPath: "/tmp/model_download.py")
         XCTAssertEqual(
             PythonProcessEnvironment.scriptArguments(script: script, arguments: ["--preflight", "Qwen/model"]),
-            ["-s", "-u", "/tmp/model_download.py", "--preflight", "Qwen/model"]
+            ["-B", "-s", "-u", "/tmp/model_download.py", "--preflight", "Qwen/model"]
         )
     }
 

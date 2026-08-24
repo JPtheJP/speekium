@@ -10,21 +10,64 @@ PROJECT_ROOT="$(cd .. && pwd)"
 PYTHON="${PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 APP="${APP:-$PROJECT_ROOT/WhisprStream.app}"
 VERSION="${VERSION:-1.0.1}"
-BUILD_NUMBER="${BUILD_NUMBER:-2}"
+BUILD_NUMBER="${BUILD_NUMBER:-3}"
 RELEASE="${RELEASE:-0}"
+ENABLE_OPTIONAL_MODELS="${ENABLE_OPTIONAL_MODELS:-}"
 RUNTIME_URL="${RUNTIME_URL:-}"
 RUNTIME_SHA256="${RUNTIME_SHA256:-}"
 RUNTIME_VERSION="${RUNTIME_VERSION:-}"
 RUNTIME_ARCHIVE_BYTES="${RUNTIME_ARCHIVE_BYTES:-}"
 RUNTIME_INSTALLED_BYTES="${RUNTIME_INSTALLED_BYTES:-}"
 UPDATE_REPOSITORY="${UPDATE_REPOSITORY:-Leo6Leo/whispr-stream}"
+PINNED_UPDATE_REPOSITORY="Leo6Leo/whispr-stream"
 UPDATE_PUBLIC_KEY_FILE="$PROJECT_ROOT/WhisprStream/update-public-key.txt"
+SIGNING_CERT_SHA1_FILE="$PROJECT_ROOT/WhisprStream/release-signing-certificate-sha1.txt"
 UPDATE_PUBLIC_KEY="${UPDATE_PUBLIC_KEY:-}"
-if [ -z "$UPDATE_PUBLIC_KEY" ] && [ -f "$UPDATE_PUBLIC_KEY_FILE" ]; then
-    UPDATE_PUBLIC_KEY="$(tr -d '\r\n' < "$UPDATE_PUBLIC_KEY_FILE")"
+PINNED_UPDATE_PUBLIC_KEY=""
+PINNED_SIGNING_CERT_SHA1=""
+if [ -f "$UPDATE_PUBLIC_KEY_FILE" ]; then
+    PINNED_UPDATE_PUBLIC_KEY="$(tr -d '\r\n' < "$UPDATE_PUBLIC_KEY_FILE")"
+fi
+if [ -f "$SIGNING_CERT_SHA1_FILE" ]; then
+    PINNED_SIGNING_CERT_SHA1="$(tr -d '\r\n' < "$SIGNING_CERT_SHA1_FILE" \
+        | tr '[:upper:]' '[:lower:]')"
+fi
+if [ -z "$UPDATE_PUBLIC_KEY" ]; then
+    UPDATE_PUBLIC_KEY="$PINNED_UPDATE_PUBLIC_KEY"
 fi
 BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-dev.local.whisprstream}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
+
+if [ -z "$ENABLE_OPTIONAL_MODELS" ]; then
+    if [ "$RELEASE" = "1" ]; then
+        ENABLE_OPTIONAL_MODELS=0
+    else
+        ENABLE_OPTIONAL_MODELS=1
+    fi
+fi
+if [ "$ENABLE_OPTIONAL_MODELS" != "0" ] && [ "$ENABLE_OPTIONAL_MODELS" != "1" ]; then
+    echo "error: ENABLE_OPTIONAL_MODELS must be 0 or 1" >&2
+    exit 1
+fi
+if [ "$RELEASE" = "1" ] && [ "$ENABLE_OPTIONAL_MODELS" != "0" ]; then
+    echo "error: optional models must remain disabled in public release builds" >&2
+    exit 1
+fi
+
+OPTIONAL_MODELS_PLIST_VALUE="<false/>"
+OPTIONAL_MODELS_LABEL="disabled"
+if [ "$ENABLE_OPTIONAL_MODELS" = "1" ]; then
+    OPTIONAL_MODELS_PLIST_VALUE="<true/>"
+    OPTIONAL_MODELS_LABEL="enabled"
+fi
+
+swift_build() {
+    if [ "$ENABLE_OPTIONAL_MODELS" = "1" ]; then
+        swift build "$@" -Xswiftc -D -Xswiftc WHISPR_ENABLE_OPTIONAL_MODELS
+    else
+        swift build "$@"
+    fi
+}
 
 if [ "$RELEASE" = "1" ]; then
     if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
@@ -49,9 +92,14 @@ if [ "$RELEASE" = "1" ]; then
         echo "error: release builds require bundle identifier com.leoleo.whisprstream" >&2
         exit 1
     fi
-    if ! [[ "$UPDATE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
-        || ! [[ "$UPDATE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
-        echo "error: release builds require a valid update repository and Ed25519 public key" >&2
+    if ! [[ "$PINNED_UPDATE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
+        || ! [[ "$PINNED_SIGNING_CERT_SHA1" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "error: release trust-root files are missing or malformed" >&2
+        exit 1
+    fi
+    if [ "$UPDATE_REPOSITORY" != "$PINNED_UPDATE_REPOSITORY" ] \
+        || [ "$UPDATE_PUBLIC_KEY" != "$PINNED_UPDATE_PUBLIC_KEY" ]; then
+        echo "error: release update repository and public key must match their checked-in pins" >&2
         exit 1
     fi
     if [ -z "$SIGNING_IDENTITY" ] || [ "$SIGNING_IDENTITY" = "-" ]; then
@@ -77,13 +125,13 @@ if [ "$RELEASE" = "1" ]; then
     # Swift embeds source and object-file paths in optimized executables. Map
     # the repository root to a stable synthetic path so public artifacts never
     # disclose the builder's user name or local directory layout.
-    swift build -c release \
+    swift_build -c release \
         -Xswiftc -file-prefix-map \
         -Xswiftc "$PROJECT_ROOT=/src" \
         -Xcc "-fdebug-prefix-map=$PROJECT_ROOT=/src" \
         -Xcc "-ffile-prefix-map=$PROJECT_ROOT=/src"
 else
-    swift build -c release
+    swift_build -c release
 fi
 
 BIN=".build/release/WhisprStream"
@@ -151,6 +199,7 @@ $DEVELOPMENT_PYTHON_PLIST
     <key>WhisprRuntimeInstalledBytes</key><string>$RUNTIME_INSTALLED_BYTES</string>
     <key>WhisprUpdateRepository</key><string>$UPDATE_REPOSITORY</string>
     <key>WhisprUpdatePublicKey</key><string>$UPDATE_PUBLIC_KEY</string>
+    <key>WhisprOptionalModelsEnabled</key>$OPTIONAL_MODELS_PLIST_VALUE
 </dict>
 </plist>
 PLIST
@@ -182,18 +231,32 @@ if [ "$RELEASE" = "1" ]; then
     # same login-Keychain signing key across rebuilds.
     codesign --force --sign "$IDENTITY" "$UPDATE_SIGNER"
     codesign --verify --strict "$UPDATE_SIGNER"
+    codesign --verify --strict \
+        -R="identifier \"WhisprStreamUpdateSigner\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
+        "$UPDATE_SIGNER"
 fi
 codesign --force --sign "$IDENTITY" "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
 codesign --force --deep --sign "$IDENTITY" "$APP"
 if [ "$RELEASE" = "1" ]; then
     codesign --verify --strict --deep "$APP"
+    codesign --verify --strict --deep \
+        -R="identifier \"com.leoleo.whisprstream\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
+        "$APP"
+    codesign --verify --strict \
+        -R="identifier \"WhisprStreamUpdateInstaller\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
+        "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
     if /usr/libexec/PlistBuddy -c "Print :WhisprDevelopmentPythonPath" "$APP/Contents/Info.plist" >/dev/null 2>&1; then
         echo "error: release Info.plist contains a development Python path" >&2
+        exit 1
+    fi
+    if [ "$(/usr/libexec/PlistBuddy -c "Print :WhisprOptionalModelsEnabled" "$APP/Contents/Info.plist")" != "false" ]; then
+        echo "error: release Info.plist enables optional models" >&2
         exit 1
     fi
 fi
 
 echo "✓ built $APP"
+echo "  optional models: $OPTIONAL_MODELS_LABEL"
 if [ "$RELEASE" = "1" ]; then
     echo "  runtime: $RUNTIME_URL"
 else

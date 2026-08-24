@@ -122,45 +122,23 @@ struct VoiceShortcutsView: View {
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 8) {
-                Menu {
-                    Button {
-                        isImporting = true
-                    } label: {
-                        Label("Import Shortcuts…", systemImage: "square.and.arrow.down")
-                    }
-
-                    Button {
-                        exportDocument = VoiceShortcutDocument(shortcuts: settings.voiceShortcuts)
-                        isExporting = true
-                    } label: {
-                        Label("Export Shortcuts…", systemImage: "square.and.arrow.up")
-                    }
-                    .disabled(settings.voiceShortcuts.isEmpty)
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .frame(width: 16)
-                }
-                .menuStyle(.button)
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .accessibilityLabel("Import or export Voice Shortcuts")
-                .help("Import or export Voice Shortcuts")
-
-                Button {
-                    editorDraft = ShortcutEditorDraft(shortcut: nil)
-                } label: {
-                    Label("New Shortcut", systemImage: "plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            Button {
+                editorDraft = ShortcutEditorDraft(shortcut: nil)
+            } label: {
+                Label("New Shortcut", systemImage: "plus")
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
     }
 
     private var shortcutSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("Your shortcuts", count: settings.voiceShortcuts.count)
+            HStack {
+                sectionTitle("Your shortcuts", count: settings.voiceShortcuts.count)
+                Spacer()
+                shortcutTransferControls
+            }
 
             if settings.voiceShortcuts.isEmpty {
                 VStack(spacing: 8) {
@@ -185,6 +163,28 @@ struct VoiceShortcutsView: View {
                 }
             }
         }
+    }
+
+    private var shortcutTransferControls: some View {
+        HStack(spacing: 6) {
+            Button {
+                isImporting = true
+            } label: {
+                Label("Import", systemImage: "square.and.arrow.down")
+            }
+            .help("Import Voice Shortcuts")
+
+            Button {
+                exportDocument = VoiceShortcutDocument(shortcuts: settings.voiceShortcuts)
+                isExporting = true
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .disabled(settings.voiceShortcuts.isEmpty)
+            .help("Export Voice Shortcuts")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private var suggestionsSection: some View {

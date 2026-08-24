@@ -2,6 +2,23 @@
 # Read-only validation for finished WhisprStream release artifacts.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PINNED_UPDATE_REPOSITORY="Leo6Leo/whispr-stream"
+UPDATE_PUBLIC_KEY_FILE="$SCRIPT_DIR/update-public-key.txt"
+SIGNING_CERT_SHA1_FILE="$SCRIPT_DIR/release-signing-certificate-sha1.txt"
+[ -f "$UPDATE_PUBLIC_KEY_FILE" ] && [ -f "$SIGNING_CERT_SHA1_FILE" ] || {
+    echo "error: checked-in release trust roots are missing" >&2
+    exit 1
+}
+PINNED_UPDATE_PUBLIC_KEY="$(tr -d '\r\n' < "$UPDATE_PUBLIC_KEY_FILE")"
+PINNED_SIGNING_CERT_SHA1="$(tr -d '\r\n' < "$SIGNING_CERT_SHA1_FILE" \
+    | tr '[:upper:]' '[:lower:]')"
+[[ "$PINNED_UPDATE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
+    && [[ "$PINNED_SIGNING_CERT_SHA1" =~ ^[0-9a-f]{40}$ ]] || {
+        echo "error: checked-in release trust roots are malformed" >&2
+        exit 1
+    }
+
 usage() {
     echo "usage: validate-release.sh app.zip runtime.zip SHA256SUMS app-signature app-version build-number" >&2
     exit 2
@@ -49,22 +66,36 @@ for EXECUTABLE in "$BIN" "$UPDATE_INSTALLER"; do
         exit 1
     fi
 done
-codesign --verify --strict --deep "$APP_DIR"
-codesign --verify --strict "$UPDATE_INSTALLER"
+codesign --verify --strict --deep \
+    -R="identifier \"com.leoleo.whisprstream\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
+    "$APP_DIR"
+codesign --verify --strict \
+    -R="identifier \"WhisprStreamUpdateInstaller\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
+    "$UPDATE_INSTALLER"
 
 plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP_DIR/Contents/Info.plist" 2>/dev/null; }
-BUNDLE_ID="$(plist CFBundleIdentifier)"
-APP_VERSION="$(plist CFBundleShortVersionString)"
-BUILD_NUMBER="$(plist CFBundleVersion)"
-MIN_OS="$(plist LSMinimumSystemVersion)"
+required_plist() {
+    local key="$1"
+    local value
+    if ! value="$(plist "$key")"; then
+        echo "error: release Info.plist is missing $key" >&2
+        return 1
+    fi
+    printf '%s' "$value"
+}
+BUNDLE_ID="$(required_plist CFBundleIdentifier)"
+APP_VERSION="$(required_plist CFBundleShortVersionString)"
+BUILD_NUMBER="$(required_plist CFBundleVersion)"
+MIN_OS="$(required_plist LSMinimumSystemVersion)"
 DEV_PYTHON="$(plist WhisprDevelopmentPythonPath || true)"
-RUNTIME_VERSION="$(plist WhisprRuntimeVersion)"
-RUNTIME_URL="$(plist WhisprRuntimeURL)"
-RUNTIME_SHA256="$(plist WhisprRuntimeSHA256)"
-ARCHIVE_BYTES="$(plist WhisprRuntimeArchiveBytes)"
-INSTALLED_BYTES="$(plist WhisprRuntimeInstalledBytes)"
-UPDATE_REPOSITORY="$(plist WhisprUpdateRepository)"
-UPDATE_PUBLIC_KEY="$(plist WhisprUpdatePublicKey)"
+RUNTIME_VERSION="$(required_plist WhisprRuntimeVersion)"
+RUNTIME_URL="$(required_plist WhisprRuntimeURL)"
+RUNTIME_SHA256="$(required_plist WhisprRuntimeSHA256)"
+ARCHIVE_BYTES="$(required_plist WhisprRuntimeArchiveBytes)"
+INSTALLED_BYTES="$(required_plist WhisprRuntimeInstalledBytes)"
+UPDATE_REPOSITORY="$(required_plist WhisprUpdateRepository)"
+UPDATE_PUBLIC_KEY="$(required_plist WhisprUpdatePublicKey)"
+OPTIONAL_MODELS_ENABLED="$(required_plist WhisprOptionalModelsEnabled)"
 
 [ "$BUNDLE_ID" = "com.leoleo.whisprstream" ] || { echo "error: development bundle identifier" >&2; exit 1; }
 [ "$APP_VERSION" = "$EXPECTED_APP_VERSION" ] || { echo "error: app version is $APP_VERSION; expected $EXPECTED_APP_VERSION" >&2; exit 1; }
@@ -76,8 +107,9 @@ UPDATE_PUBLIC_KEY="$(plist WhisprUpdatePublicKey)"
 [[ "$RUNTIME_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: invalid runtime version" >&2; exit 1; }
 [[ "$ARCHIVE_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "error: invalid runtime archive bytes" >&2; exit 1; }
 [[ "$INSTALLED_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "error: invalid runtime installed bytes" >&2; exit 1; }
-[[ "$UPDATE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "error: invalid update repository" >&2; exit 1; }
-[[ "$UPDATE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] || { echo "error: invalid update public key" >&2; exit 1; }
+[ "$UPDATE_REPOSITORY" = "$PINNED_UPDATE_REPOSITORY" ] || { echo "error: update repository differs from checked-in pin" >&2; exit 1; }
+[ "$UPDATE_PUBLIC_KEY" = "$PINNED_UPDATE_PUBLIC_KEY" ] || { echo "error: update public key differs from checked-in pin" >&2; exit 1; }
+[ "$OPTIONAL_MODELS_ENABLED" = "false" ] || { echo "error: optional models must be disabled in this public release" >&2; exit 1; }
 
 grep -F "  $(basename "$APP")" "$SHA256SUMS" >/dev/null || { echo "error: app is missing from SHA256SUMS" >&2; exit 1; }
 grep -F "  $(basename "$RUNTIME_ZIP")" "$SHA256SUMS" >/dev/null || { echo "error: runtime is missing from SHA256SUMS" >&2; exit 1; }
@@ -90,10 +122,32 @@ grep -F "$RUNTIME_HASH  $(basename "$RUNTIME_ZIP")" "$SHA256SUMS" >/dev/null || 
 grep -F "$SIGNATURE_HASH  $(basename "$APP_SIGNATURE")" "$SHA256SUMS" >/dev/null || { echo "error: app signature checksum differs from SHA256SUMS" >&2; exit 1; }
 [ "$RUNTIME_HASH" = "$RUNTIME_SHA256" ] || { echo "error: app embedded runtime checksum differs from runtime archive" >&2; exit 1; }
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-UPDATE_SIGNER="$SCRIPT_DIR/.build/release/WhisprStreamUpdateSigner"
-[ -x "$UPDATE_SIGNER" ] || { echo "error: release update-signing tool is missing" >&2; exit 1; }
-"$UPDATE_SIGNER" verify "$UPDATE_PUBLIC_KEY" "$APP" "$APP_SIGNATURE" >/dev/null
+/usr/bin/swift -e '
+import CryptoKit
+import Darwin
+import Foundation
+
+guard CommandLine.arguments.count == 4,
+      let publicKeyData = Data(base64Encoded: CommandLine.arguments[1]),
+      publicKeyData.count == 32,
+      let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKeyData),
+      let signatureText = try? String(
+        contentsOfFile: CommandLine.arguments[3],
+        encoding: .utf8
+      ),
+      let signature = Data(base64Encoded: signatureText.trimmingCharacters(
+        in: .whitespacesAndNewlines
+      )),
+      signature.count == 64,
+      let archive = try? Data(
+        contentsOf: URL(fileURLWithPath: CommandLine.arguments[2]),
+        options: .mappedIfSafe
+      ),
+      publicKey.isValidSignature(signature, for: archive) else {
+    fputs("invalid Ed25519 release signature\n", stderr)
+    exit(EXIT_FAILURE)
+}
+' "$PINNED_UPDATE_PUBLIC_KEY" "$APP" "$APP_SIGNATURE"
 
 STAGING="$VALIDATION_TMP/runtime"
 unzip -q "$RUNTIME_ZIP" -d "$STAGING"
@@ -118,7 +172,8 @@ while IFS= read -r FILE; do
         echo "error: runtime binary requires macOS ${BINARY_MIN_OS:-unknown}: $FILE" >&2
         exit 1
     }
-    codesign --verify --strict "$FILE"
+    codesign --verify --strict \
+        -R="certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" "$FILE"
 done < <(find "$STAGING/runtime" -type f -print0 | xargs -0 file | awk -F: '/Mach-O/ {print $1}')
 
 echo "release artifacts validated"

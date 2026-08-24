@@ -30,7 +30,7 @@ final class FirstDictationCoachPanel: NSPanel {
     private static let panelSize = NSSize(width: 600, height: 150)
     private static let bottomMargin: CGFloat = 90
 
-    init(key: TriggerKey, mode: ActivationMode) {
+    init(shortcut: TriggerShortcut, mode: ActivationMode) {
         super.init(
             contentRect: NSRect(origin: .zero, size: Self.panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -49,7 +49,7 @@ final class FirstDictationCoachPanel: NSPanel {
         isReleasedWhenClosed = false
         animationBehavior = .none
 
-        let host = NSHostingView(rootView: FirstDictationCoachView(key: key, mode: mode))
+        let host = NSHostingView(rootView: FirstDictationCoachView(shortcut: shortcut, mode: mode))
         host.wantsLayer = true
         host.layer?.backgroundColor = NSColor.clear.cgColor
         contentView = host
@@ -93,7 +93,7 @@ final class FirstDictationCoachPanel: NSPanel {
 }
 
 struct FirstDictationCoachView: View {
-    let key: TriggerKey
+    let shortcut: TriggerShortcut
     let mode: ActivationMode
 
     @State private var animating = false
@@ -106,7 +106,7 @@ struct FirstDictationCoachView: View {
                 Text("Try your first dictation")
                     .font(.system(size: 15.5, weight: .semibold, design: .rounded))
 
-                Text(Self.instruction(key: key, mode: mode))
+                Text(Self.instruction(shortcut: shortcut, mode: mode))
                     .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -144,9 +144,10 @@ struct FirstDictationCoachView: View {
                 .scaleEffect(animating ? 1.14 : 0.96)
                 .opacity(animating ? 0 : 0.75)
 
-            Text(Self.keyName(key))
+            Text(Self.keyName(shortcut))
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .lineLimit(2)
+                .minimumScaleFactor(0.55)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 104, height: 56)
@@ -167,16 +168,22 @@ struct FirstDictationCoachView: View {
         )
     }
 
-    static func instruction(key: TriggerKey, mode: ActivationMode) -> String {
+    static func instruction(shortcut: TriggerShortcut, mode: ActivationMode) -> String {
         switch mode {
         case .hold:
-            return "Click in any text field, then hold \(keyName(key)), speak, and release."
+            return "Click in any text field, then hold \(keyName(shortcut)), speak, and release."
         case .tap:
-            return "Click in any text field, tap \(keyName(key)), speak, then tap it again."
+            return "Click in any text field, tap \(keyName(shortcut)), speak, then tap it again."
         }
     }
 
-    private static func keyName(_ key: TriggerKey) -> String {
-        key == .function ? "Fn" : "\(key.symbol) \(key.label)"
+    /// Kept as a small compatibility helper for existing copy tests and any
+    /// callers that still construct a coach from a legacy preset.
+    static func instruction(key: TriggerKey, mode: ActivationMode) -> String {
+        instruction(shortcut: .modifierOnly(key), mode: mode)
+    }
+
+    private static func keyName(_ shortcut: TriggerShortcut) -> String {
+        shortcut.compactDisplay
     }
 }

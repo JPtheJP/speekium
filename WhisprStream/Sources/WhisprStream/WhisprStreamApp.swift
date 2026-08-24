@@ -35,6 +35,11 @@ struct TranscriptDeliveryGate {
 @main
 enum Main {
     static func main() {
+        if TriggerShortcutE2E.isRequested {
+            TriggerShortcutE2E.run()
+            return
+        }
+
         if ContextAwareCapitalizationE2E.isRequested {
             ContextAwareCapitalizationE2E.run()
             return
@@ -53,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let speechEngineStartupTimeout: TimeInterval = 20
 
     private let state = AppState()
-    private let settings = Settings.shared
+    private lazy var settings = Settings.shared
     private let windows = AppWindows()
     private let runtime = RuntimeManager.shared
 
@@ -77,6 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeCursorContextGeneration: Int?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The updater retains its rollback copy until this process proves that
+        // AppKit reached the application delegate and stays alive briefly.
+        UpdateLaunchHealth.signalIfRequested()
+        offerLegacyContentMigrationIfNeeded()
         panel = HUDPanel(state: state)
         state.onDictationLimitReached = { [weak self] in
             guard let self else { return }
@@ -114,6 +123,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             presentSetup()
         }
+    }
+
+    private func offerLegacyContentMigrationIfNeeded() {
+        let plan: LegacyPreferencesMigrationPlan
+        do {
+            guard let pending = try LegacyPreferencesMigration.pendingPlan() else { return }
+            plan = pending
+        } catch {
+            // Detection is read-only. If either domain has an unexpected shape,
+            // preserve both and leave the completion marker unset for recovery.
+            Log.write("legacy content migration detection failed: \(error)")
+            return
+        }
+
+        let summary = plan.summary
+        var details = "WhisprStream found data saved by a development build. "
+            + "It can add \(summary.vocabularyAdded) vocabulary "
+            + (summary.vocabularyAdded == 1 ? "entry" : "entries")
+            + " and \(summary.shortcutsAdded) Voice "
+            + (summary.shortcutsAdded == 1 ? "Shortcut" : "Shortcuts")
+            + " to this release.\n\n"
+            + "Your current release data will be kept, and the development "
+            + "data will not be changed or deleted."
+        if summary.shortcutConflictsSkipped > 0 {
+            details += "\n\n\(summary.shortcutConflictsSkipped) shortcut "
+                + (summary.shortcutConflictsSkipped == 1 ? "conflict" : "conflicts")
+                + " will keep the current release replacement."
+        }
+        if summary.invalidShortcutsSkipped > 0 {
+            details += "\n\n\(summary.invalidShortcutsSkipped) invalid development "
+                + (summary.invalidShortcutsSkipped == 1 ? "shortcut" : "shortcuts")
+                + " cannot be imported."
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Import Vocabulary and Voice Shortcuts?"
+        alert.informativeText = details
+        alert.addButton(withTitle: "Import Data")
+        alert.addButton(withTitle: "Not Now")
+        NSApp.activate(ignoringOtherApps: true)
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            Log.write("legacy content migration deferred by user")
+            return
+        }
+
+        LegacyPreferencesMigration.apply(plan)
+        Log.write(
+            "legacy content migration completed: "
+                + "vocabularyAdded=\(summary.vocabularyAdded) "
+                + "shortcutsAdded=\(summary.shortcutsAdded) "
+                + "shortcutConflictsSkipped=\(summary.shortcutConflictsSkipped) "
+                + "invalidShortcutsSkipped=\(summary.invalidShortcutsSkipped)"
+        )
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -167,7 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) else { return }
         markFirstDictationCoachHandled()
         windows.showFirstDictationCoach(
-            key: settings.triggerKey,
+            shortcut: settings.triggerShortcut,
             mode: settings.activationMode
         )
     }
@@ -189,7 +253,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        hotkey = HotKeyMonitor(key: settings.triggerKey, mode: settings.activationMode)
+        hotkey = HotKeyMonitor(
+            shortcut: settings.triggerShortcut,
+            mode: settings.activationMode
+        )
         hotkey.onStart = { [weak self] in
             guard let self else { return }
             if self.shouldShowFirstDictationCoach {
@@ -199,13 +266,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.beginDictation()
         }
         hotkey.onStop = { [weak self] in self?.endDictation() }
-        hotkey.start()
-
-        settings.onChange = { [weak self] in
+        settings.onHotKeyConfigurationChange = { [weak self] in
             guard let self else { return }
-            self.hotkey.rebind(key: self.settings.triggerKey, mode: self.settings.activationMode)
+            self.hotkey.rebind(
+                shortcut: self.settings.triggerShortcut,
+                mode: self.settings.activationMode
+            )
             self.refreshStatusMenu()
         }
+        settings.onTriggerShortcutCaptureChange = { [weak self] capturing in
+            guard let hotkey = self?.hotkey else { return }
+            hotkey.setSuspendedForShortcutCapture(capturing)
+        }
+        hotkey.setSuspendedForShortcutCapture(settings.isCapturingTriggerShortcut)
         settings.onContextChange = { [weak self] terms in self?.asr?.setContext(terms) }
         settings.onModelChange = { [weak self] _ in self?.reloadASR() }
         settings.onShortUtteranceLanguageChange = { [weak self] _ in self?.reloadASR() }
@@ -274,11 +347,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             throw CocoaError(.fileNoSuchFile)
         }
 
+        let selectedModel = settings.model.isBuiltIn ? settings.model : .small
+        let model: String
+        let engine: ASREngine
+        let bits: Int
+        if FeatureFlags.optionalModelsEnabled {
+            model = env["WHISPR_MODEL"] ?? selectedModel.rawValue
+            engine = ASREngine(rawValue: env["WHISPR_ENGINE"] ?? "")
+                ?? selectedModel.engine
+            bits = Int(env["WHISPR_BITS"] ?? "8") ?? 8
+        } else {
+            // Release builds ignore developer overrides as well as old custom
+            // selections, keeping the public runtime on its pinned Qwen path.
+            model = selectedModel.rawValue
+            engine = .qwen3
+            bits = 8
+        }
+
         return ASRService(
             python: python,
             script: script,
-            model: env["WHISPR_MODEL"] ?? settings.model.rawValue,
-            bits: Int(env["WHISPR_BITS"] ?? "8") ?? 8,
+            model: model,
+            engine: engine,
+            bits: bits,
             context: settings.asrContext,
             shortUtteranceLanguage: settings.shortUtteranceLanguage
         )
@@ -337,7 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let verb = settings.activationMode == .hold ? "Hold" : "Tap"
         let hintTitle: String
         if isASRReady {
-            hintTitle = "\(verb) \(settings.triggerKey.symbol) \(settings.triggerKey.label) to dictate"
+            hintTitle = "\(verb) \(settings.triggerShortcut.compactDisplay) to dictate"
         } else if asr != nil {
             hintTitle = "Speech engine warming up…"
         } else {

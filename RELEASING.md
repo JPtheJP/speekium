@@ -2,20 +2,13 @@
 
 WhisprStream ships a small native app and a separately downloadable Apple-silicon speech engine. Public builds are ZIPs, are not notarized, and use a stable self-signed identity.
 
-## 1. Build and validate the runtime
+## 1. Select and validate the runtime
 
 Use a relocatable standalone CPython 3.12 distribution. Do not use Homebrew Python or a venv.
 
-```bash
-SIGNING_IDENTITY="WhisprStream Self-Signed" \
-SOURCE_PYTHON=/path/to/python-build-standalone/install/bin/python3.12 \
-RUNTIME_VERSION=1.0.0 RELEASE=1 \
-WhisprStream/build-runtime.sh
-```
+Public app version `1.0.1` compiles optional models out and intentionally reuses the immutable `WhisprStream-runtime-1.0.0-arm64.zip` asset. Do not rebuild or replace that asset under its existing version or URL.
 
-The script installs only `requirements-macos-arm64.txt`, explicitly selects macOS 14 arm64 wheels regardless of the builder's macOS version, runs the import/version health check, rejects Mach-O files with a deployment target above macOS 14, checks for build-machine paths, signs and verifies every Mach-O file, writes `runtime/manifest.json`, and emits a machine-readable `.metadata.json` file with archive size, installed size, and SHA-256.
-
-Create the runtime release asset as `WhisprStream-runtime-1.0.0-arm64.zip` and record its metadata.
+The current `build-runtime.sh` includes the experimental MLX Whisper adapter and is for a future runtime version only. Before enabling optional models publicly, resolve the deferred model-validation work, assign a new immutable runtime version (for example `1.1.0`), build it, and update every runtime value below.
 
 ## 2. Build the app
 
@@ -47,23 +40,27 @@ WhisprStream/.build/release/WhisprStreamUpdateSigner export \
 
 Losing both the Keychain item and its backup breaks the automatic-update chain
 for installed versions. Do not rotate this key as part of a normal release.
+The expected code-signing certificate SHA-1 is independently pinned in
+`WhisprStream/release-signing-certificate-sha1.txt`. The release builder rejects
+an update key, repository, or signing identity that differs from these reviewed
+trust roots. Change a pin only as an explicit key-rotation procedure.
 
 App version `1.0.1` intentionally reuses runtime version `1.0.0`; the runtime
 version changes only when the standalone Python or dependency payload changes.
 
 ```bash
-RELEASE=1 VERSION=1.0.1 BUILD_NUMBER=2 \
+RELEASE=1 VERSION=1.0.1 BUILD_NUMBER=3 ENABLE_OPTIONAL_MODELS=0 \
 BUNDLE_IDENTIFIER="com.leoleo.whisprstream" \
 SIGNING_IDENTITY="WhisprStream Self-Signed" \
 RUNTIME_VERSION=1.0.0 \
 RUNTIME_URL="https://github.com/Leo6Leo/whispr-stream/releases/download/v1.0.0/WhisprStream-runtime-1.0.0-arm64.zip" \
-RUNTIME_SHA256="<64-character-runtime-sha256>" \
-RUNTIME_ARCHIVE_BYTES="<archive-bytes>" \
-RUNTIME_INSTALLED_BYTES="<installed-bytes>" \
+RUNTIME_SHA256="b155e21c0bad58d9566430205d0226d7e9066f7b7b7886c7107a53e5a33e221f" \
+RUNTIME_ARCHIVE_BYTES="78119418" \
+RUNTIME_INSTALLED_BYTES="248872960" \
 WhisprStream/build.sh
 ```
 
-`RELEASE=1` fails if any runtime value is missing, malformed, zero, non-HTTPS, or if the bundle identifier is not `com.leoleo.whisprstream`. It also fails without a signing identity; it never silently falls back to ad-hoc signing. Release compilation remaps the repository root to `/src`, strips linker-generated `N_OSO` debug records, and both the builder and validator reject executables containing `/Users/` or `/home/` build-machine paths.
+`RELEASE=1` fails if optional models are enabled, if any runtime value is missing, malformed, zero, non-HTTPS, or if the bundle identifier is not `com.leoleo.whisprstream`. It also fails without a signing identity; it never silently falls back to ad-hoc signing. Release compilation remaps the repository root to `/src`, strips linker-generated `N_OSO` debug records, and both the builder and validator reject executables containing `/Users/` or `/home/` build-machine paths.
 The same release identity is also applied to the update-signing utility so it
 can reuse the protected Keychain item when the utility is rebuilt.
 
@@ -77,8 +74,11 @@ WhisprStream/.build/release/WhisprStreamUpdateSigner sign \
 ```
 
 Create `SHA256SUMS` for all three artifacts and run the read-only validator.
-The validator checks the detached update signature, extracts the app with macOS
-metadata preserved, and rejects an unexpected app version or build number:
+The validator checks the detached update signature with an independent inline
+CryptoKit verifier and the checked-in public-key pin, requires the pinned
+signing certificate on the app, helper, and runtime Mach-O files, extracts the
+app with macOS metadata preserved, and rejects an unexpected app version or
+build number:
 
 ```bash
 shasum -a 256 WhisprStream-macos-arm64.zip \
@@ -86,8 +86,48 @@ shasum -a 256 WhisprStream-macos-arm64.zip \
   WhisprStream-runtime-1.0.0-arm64.zip > SHA256SUMS
 WhisprStream/validate-release.sh WhisprStream-macos-arm64.zip \
   WhisprStream-runtime-1.0.0-arm64.zip SHA256SUMS \
-  WhisprStream-macos-arm64.zip.ed25519 1.0.1 2
+  WhisprStream-macos-arm64.zip.ed25519 1.0.1 3
 ```
+
+## Local updater dry runs
+
+No GitHub Release is needed to exercise the updater. Run the non-interactive
+helper harness first:
+
+```bash
+WhisprStream/test-updater-e2e.sh
+```
+
+It builds the real helper and tests successful replacement, missing-executable
+and missing-health-signal rollback, cleanup, and unsafe-path rejection using
+disposable app bundles under `/tmp`. It never touches the repository app or
+`/Applications`.
+
+To exercise the actual Settings → About UI, quit every running WhisprStream
+instance and run:
+
+```bash
+WhisprStream/run-mock-update.sh success
+```
+
+The script builds fresh debug executables, creates current and replacement app
+copies under `/tmp`, generates an ephemeral Ed25519 key, serves the signed ZIP
+and GitHub-shaped metadata on loopback, and launches only the temporary current
+app. Choose **Install and Relaunch**, confirm version 9.9.9 is reported as
+installed, and press Control-C in Terminal to remove the test environment.
+
+Repeat the UI flow for the expected failure states:
+
+```bash
+WhisprStream/run-mock-update.sh tampered-signature
+WhisprStream/run-mock-update.sh wrong-size
+WhisprStream/run-mock-update.sh wrong-version
+```
+
+Use `--prepare-only` to validate creation and HTTP serving without opening the
+app. The `WHISPR_UPDATE_FEED_URL` override exists only in debug builds, accepts
+only loopback HTTP URLs, and is compiled out of release builds. Production
+builds continue to require HTTPS GitHub release and asset URLs.
 
 ## 3. Stable self-signing
 
@@ -142,3 +182,8 @@ In a local build, Settings → Engine also has “Enter simulated first run” f
 testing without relaunching.
 
 This mode is developer-only and is never included as a public runtime path.
+
+Local builds enable experimental optional models by default. Use
+`ENABLE_OPTIONAL_MODELS=0 WhisprStream/build.sh` to reproduce the public 1.0.1
+model UI and runtime requirements. `RELEASE=1` always enforces that setting and
+cannot be overridden.

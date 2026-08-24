@@ -179,11 +179,12 @@ class Server:
         bits: int,
         context: str,
         short_utterance_language: str = "English",
+        engine: str = "qwen3",
     ):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from asr_engine import build_session
 
-        self.session, load_secs = build_session(model_id, bits)
+        self.session, load_secs = build_session(model_id, bits, engine=engine)
         emit({"type": "ready", "ms": int(load_secs * 1000)})
 
         self.lock = threading.Lock()
@@ -484,6 +485,7 @@ class Server:
 
 def main() -> int:
     model_id = os.environ.get("WHISPR_MODEL", "Qwen/Qwen3-ASR-0.6B")
+    engine = os.environ.get("WHISPR_ENGINE", "qwen3")
     bits = int(os.environ.get("WHISPR_BITS", "8"))
     context = os.environ.get("WHISPR_CONTEXT", "")
     short_utterance_language = os.environ.get(
@@ -492,7 +494,13 @@ def main() -> int:
     )
 
     try:
-        server = Server(model_id, bits, context, short_utterance_language)
+        server = Server(
+            model_id,
+            bits,
+            context,
+            short_utterance_language,
+            engine=engine,
+        )
     except Exception as e:
         emit({"type": "error", "message": f"load: {e}"})
         return 1

@@ -583,9 +583,9 @@ struct OnboardingView: View {
         }
         switch settings.activationMode {
         case .hold:
-            return "Hold \(settings.triggerKey.label) anywhere, speak,\nand let go. Your words appear at the cursor."
+            return "Hold \(settings.triggerShortcut.compactDisplay) anywhere, speak,\nand let go. Your words appear at the cursor."
         case .tap:
-            return "Tap \(settings.triggerKey.label) to start, speak,\nand tap again. Your words appear at the cursor."
+            return "Tap \(settings.triggerShortcut.compactDisplay) to start, speak,\nand tap again. Your words appear at the cursor."
         }
     }
 
@@ -1001,17 +1001,10 @@ struct KeyPicker: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("Trigger key")
+            Text("Recording shortcut")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
-
-            Picker("", selection: $settings.triggerKey) {
-                ForEach(TriggerKey.allCases) { key in
-                    Text("\(key.symbol)  \(key.label)").tag(key)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 210)
+            TriggerShortcutEditor(settings: settings, compact: true)
         }
     }
 }

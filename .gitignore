@@ -10,6 +10,7 @@ __pycache__/
 
 # Locally built application bundle
 WhisprStream.app/
+/WhisprStream Migration Test.app/
 
 # ML model weights
 models/

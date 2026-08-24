@@ -778,6 +778,7 @@ enum TextInserter {
     }
 
     private static func post(_ event: CGEvent, targetProcessID: pid_t?) {
+        SyntheticInputEvent.mark(event)
         if let targetProcessID {
             event.postToPid(targetProcessID)
         } else {

@@ -2,12 +2,26 @@ import Darwin
 import Foundation
 
 private let expectedBundleIdentifier = "com.leoleo.whisprstream"
+private let healthFileArgument = "--whispr-update-health-file"
+private let healthTokenArgument = "--whispr-update-health-token"
+private let launchStabilityInterval: TimeInterval = 2
+
+private var launchHealthTimeout: TimeInterval {
+#if DEBUG
+    if let rawValue = ProcessInfo.processInfo.environment["WHISPR_UPDATE_HEALTH_TIMEOUT"],
+       let value = TimeInterval(rawValue), (1...60).contains(value) {
+        return value
+    }
+#endif
+    return 20
+}
 
 private enum InstallerError: LocalizedError {
     case invalidArguments
     case unsafePath
     case invalidBundle
     case readySignalFailed
+    case healthSignalFailed
     case appDidNotTerminate
     case replacementFailed(String)
 
@@ -21,6 +35,8 @@ private enum InstallerError: LocalizedError {
             return "The staged update is not a valid WhisprStream app."
         case .readySignalFailed:
             return "The update installer could not signal that it is ready."
+        case .healthSignalFailed:
+            return "The update installer could not prepare its launch health check."
         case .appDidNotTerminate:
             return "WhisprStream did not terminate before the update deadline."
         case let .replacementFailed(message):
@@ -35,9 +51,11 @@ private struct Arguments {
     let targetApp: URL
     let cleanupRoot: URL
     let readyFile: URL
+    let healthFile: URL
+    let healthToken: String
 
     init(_ values: [String]) throws {
-        guard values.count == 11 else { throw InstallerError.invalidArguments }
+        guard values.count == 15 else { throw InstallerError.invalidArguments }
         var parsed: [String: String] = [:]
         var index = 1
         while index < values.count {
@@ -49,7 +67,10 @@ private struct Arguments {
               let staged = parsed["--staged-app"],
               let target = parsed["--target-app"],
               let cleanup = parsed["--cleanup-root"],
-              let ready = parsed["--ready-file"] else {
+              let ready = parsed["--ready-file"],
+              let health = parsed["--health-file"],
+              let token = parsed["--health-token"],
+              UUID(uuidString: token) != nil else {
             throw InstallerError.invalidArguments
         }
         parentPID = pid
@@ -57,6 +78,8 @@ private struct Arguments {
         targetApp = URL(fileURLWithPath: target, isDirectory: true).standardizedFileURL
         cleanupRoot = URL(fileURLWithPath: cleanup, isDirectory: true).standardizedFileURL
         readyFile = URL(fileURLWithPath: ready, isDirectory: false).standardizedFileURL
+        healthFile = URL(fileURLWithPath: health, isDirectory: false).standardizedFileURL
+        healthToken = token
     }
 }
 
@@ -80,6 +103,9 @@ private func validate(_ arguments: Arguments) throws {
           arguments.readyFile.deletingLastPathComponent().standardizedFileURL
             == arguments.cleanupRoot,
           arguments.readyFile.lastPathComponent == "ready",
+          arguments.healthFile.deletingLastPathComponent().standardizedFileURL
+            == arguments.cleanupRoot,
+          arguments.healthFile.lastPathComponent == "health",
           isDirectoryWithoutSymlink(at: arguments.cleanupRoot),
           isDirectoryWithoutSymlink(at: arguments.targetApp),
           isDirectoryWithoutSymlink(at: arguments.stagedApp) else {
@@ -130,6 +156,73 @@ private func relaunch(_ app: URL) -> Bool {
     }
 }
 
+private func stop(_ process: Process) {
+    guard process.isRunning else { return }
+    process.terminate()
+    let deadline = Date().addingTimeInterval(2)
+    while process.isRunning, Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    if process.isRunning {
+        kill(process.processIdentifier, SIGKILL)
+    }
+    process.waitUntilExit()
+}
+
+private func launchAndConfirmHealth(
+    _ app: URL,
+    healthFile: URL,
+    token: String
+) -> Bool {
+    guard let bundle = Bundle(url: app),
+          let executableName = bundle.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
+          !executableName.isEmpty,
+          !executableName.contains("/") else {
+        return false
+    }
+    let executable = app
+        .appendingPathComponent("Contents/MacOS", isDirectory: true)
+        .appendingPathComponent(executableName, isDirectory: false)
+    guard FileManager.default.isExecutableFile(atPath: executable.path) else { return false }
+
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = [
+        healthFileArgument, healthFile.path,
+        healthTokenArgument, token,
+    ]
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        return false
+    }
+
+    let deadline = Date().addingTimeInterval(launchHealthTimeout)
+    var signalReceivedAt: Date?
+    while Date() < deadline {
+        guard process.isRunning else {
+            process.waitUntilExit()
+            return false
+        }
+        if let contents = try? String(contentsOf: healthFile, encoding: .utf8),
+           contents == token {
+            if signalReceivedAt == nil {
+                signalReceivedAt = Date()
+            }
+            if Date().timeIntervalSince(signalReceivedAt!) >= launchStabilityInterval {
+                return process.isRunning
+            }
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+
+    stop(process)
+    return false
+}
+
 private func install(_ arguments: Arguments) throws {
     try waitForParentToExit(arguments.parentPID)
 
@@ -153,7 +246,11 @@ private func install(_ arguments: Arguments) throws {
         throw InstallerError.replacementFailed(error.localizedDescription)
     }
 
-    guard relaunch(arguments.targetApp) else {
+    guard launchAndConfirmHealth(
+        arguments.targetApp,
+        healthFile: arguments.healthFile,
+        token: arguments.healthToken
+    ) else {
         let failedReplacement = parent.appendingPathComponent(
             ".WhisprStream.update-failed-\(UUID().uuidString).app",
             isDirectory: true
@@ -172,7 +269,7 @@ private func install(_ arguments: Arguments) throws {
             relaunch(arguments.targetApp)
             try? manager.removeItem(at: failedReplacement)
             throw InstallerError.replacementFailed(
-                "the new version did not relaunch; the previous version was restored"
+                "the new version did not report a healthy launch; the previous version was restored"
             )
         } catch let error as InstallerError {
             throw error
@@ -195,6 +292,14 @@ private enum WhisprStreamUpdateInstaller {
                 try? FileManager.default.removeItem(at: arguments.stagedApp)
                 try? FileManager.default.removeItem(at: arguments.cleanupRoot)
             }
+            guard FileManager.default.createFile(
+                atPath: arguments.healthFile.path,
+                contents: Data()
+            ) else {
+                throw InstallerError.healthSignalFailed
+            }
+            // Publish readiness only after every file needed for the handoff
+            // exists. The running app may terminate as soon as it sees this.
             guard FileManager.default.createFile(
                 atPath: arguments.readyFile.path,
                 contents: Data()

@@ -43,6 +43,7 @@ final class AppUpdateManager: ObservableObject {
     private let publicKey: String?
     private let appBundleURL: URL
     private let session: URLSession
+    private let developerFeedURL: URL?
     private var updateTask: Task<Void, Never>?
     private var lastRelease: Release?
 
@@ -51,16 +52,23 @@ final class AppUpdateManager: ObservableObject {
     }
 
     init(
-        repository: String? = ProcessInfo.processInfo.environment["WHISPR_UPDATE_REPOSITORY"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "WhisprUpdateRepository") as? String,
+        repository: String? = AppUpdateManager.configuredUpdateRepository(
+            bundleValue: Bundle.main.object(
+                forInfoDictionaryKey: "WhisprUpdateRepository"
+            ) as? String
+        ),
         currentVersion: String = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
         ) as? String ?? "0.0.0",
         bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "",
-        publicKey: String? = ProcessInfo.processInfo.environment["WHISPR_UPDATE_PUBLIC_KEY"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "WhisprUpdatePublicKey") as? String,
+        publicKey: String? = AppUpdateManager.configuredUpdatePublicKey(
+            bundleValue: Bundle.main.object(
+                forInfoDictionaryKey: "WhisprUpdatePublicKey"
+            ) as? String
+        ),
         appBundleURL: URL = Bundle.main.bundleURL,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        developerFeedURL: URL? = AppUpdateManager.developerFeedURLFromEnvironment()
     ) {
         self.repository = repository?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.currentVersion = currentVersion
@@ -68,6 +76,14 @@ final class AppUpdateManager: ObservableObject {
         self.publicKey = publicKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.appBundleURL = appBundleURL.standardizedFileURL
         self.session = session
+#if DEBUG
+        self.developerFeedURL = developerFeedURL
+#else
+        // A release build always discovers updates from the configured GitHub
+        // repository. Keep the local-feed seam compile-time disabled even if
+        // a caller or inherited process environment supplies a value.
+        self.developerFeedURL = nil
+#endif
     }
 
     deinit { updateTask?.cancel() }
@@ -91,11 +107,13 @@ final class AppUpdateManager: ObservableObject {
             do {
                 let githubRelease = try await Self.fetchLatestRelease(
                     for: repository,
-                    session: self.session
+                    session: self.session,
+                    developerFeedURL: self.developerFeedURL
                 )
                 if let release = try Self.release(
                     from: githubRelease,
-                    currentVersion: self.currentVersion
+                    currentVersion: self.currentVersion,
+                    allowDeveloperAssetURLs: self.developerFeedURL != nil
                 ) {
                     self.lastRelease = release
                     self.status = .available(release)
@@ -164,10 +182,22 @@ final class AppUpdateManager: ObservableObject {
 
     nonisolated static func fetchLatestRelease(
         for repository: String,
-        session: URLSession
+        session: URLSession,
+        developerFeedURL: URL? = nil
     ) async throws -> GitHubRelease {
-        guard let endpoint = URL(string: "https://api.github.com/repos/\(repository)/releases/latest") else {
-            throw UpdateError.invalidRepository
+        let endpoint: URL
+        if let developerFeedURL {
+            guard isLocalDeveloperURL(developerFeedURL) else {
+                throw UpdateError.invalidDeveloperFeed
+            }
+            endpoint = developerFeedURL
+        } else {
+            guard let githubEndpoint = URL(
+                string: "https://api.github.com/repos/\(repository)/releases/latest"
+            ) else {
+                throw UpdateError.invalidRepository
+            }
+            endpoint = githubEndpoint
         }
         var request = URLRequest(url: endpoint)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -185,7 +215,8 @@ final class AppUpdateManager: ObservableObject {
 
     nonisolated static func release(
         from githubRelease: GitHubRelease,
-        currentVersion: String
+        currentVersion: String,
+        allowDeveloperAssetURLs: Bool = false
     ) throws -> Release? {
         guard let latest = SemanticVersion(githubRelease.tagName),
               let current = SemanticVersion(currentVersion) else {
@@ -201,8 +232,14 @@ final class AppUpdateManager: ObservableObject {
         let signature = signatures[0]
         guard archive.size > 0, archive.size <= maximumArchiveBytes,
               signature.size > 0, signature.size <= Int64(maximumSignatureBytes),
-              isSecureGitHubURL(archive.downloadURL),
-              isSecureGitHubURL(signature.downloadURL) else {
+              isAllowedAssetURL(
+                  archive.downloadURL,
+                  allowDeveloperAssetURLs: allowDeveloperAssetURLs
+              ),
+              isAllowedAssetURL(
+                  signature.downloadURL,
+                  allowDeveloperAssetURLs: allowDeveloperAssetURLs
+              ) else {
             throw UpdateError.invalidAssets
         }
 
@@ -236,8 +273,65 @@ final class AppUpdateManager: ObservableObject {
         return true
     }
 
+    nonisolated static func configuredUpdateRepository(
+        bundleValue: String?,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+#if DEBUG
+        return environment["WHISPR_UPDATE_REPOSITORY"] ?? bundleValue
+#else
+        // Repository and signing key are release trust roots. A process
+        // environment inherited from Terminal or launchctl must not replace
+        // values sealed into the signed public app.
+        return bundleValue
+#endif
+    }
+
+    nonisolated static func configuredUpdatePublicKey(
+        bundleValue: String?,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+#if DEBUG
+        return environment["WHISPR_UPDATE_PUBLIC_KEY"] ?? bundleValue
+#else
+        return bundleValue
+#endif
+    }
+
+    nonisolated static func developerFeedURLFromEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL? {
+#if DEBUG
+        guard let rawValue = environment["WHISPR_UPDATE_FEED_URL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return nil
+        }
+        return URL(string: rawValue)
+#else
+        return nil
+#endif
+    }
+
     private nonisolated static func isSecureGitHubURL(_ url: URL) -> Bool {
         url.scheme == "https" && url.host?.lowercased() == "github.com"
+    }
+
+    private nonisolated static func isAllowedAssetURL(
+        _ url: URL,
+        allowDeveloperAssetURLs: Bool
+    ) -> Bool {
+        isSecureGitHubURL(url)
+            || (allowDeveloperAssetURLs && isLocalDeveloperURL(url))
+    }
+
+    nonisolated static func isLocalDeveloperURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "http",
+              url.user == nil, url.password == nil,
+              let host = url.host?.lowercased() else {
+            return false
+        }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 
     // MARK: - Download and validation
@@ -452,6 +546,8 @@ final class AppUpdateManager: ObservableObject {
                 )
                 let helper = helperRoot.appendingPathComponent("WhisprStreamUpdateInstaller")
                 let readyFile = helperRoot.appendingPathComponent("ready")
+                let healthFile = helperRoot.appendingPathComponent("health")
+                let healthToken = UUID().uuidString
                 try manager.copyItem(at: helperSource, to: helper)
                 try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
 
@@ -463,6 +559,8 @@ final class AppUpdateManager: ObservableObject {
                     "--target-app", target.path,
                     "--cleanup-root", helperRoot.path,
                     "--ready-file", readyFile.path,
+                    "--health-file", healthFile.path,
+                    "--health-token", healthToken,
                 ]
                 try process.run()
                 let deadline = Date().addingTimeInterval(5)
@@ -517,6 +615,7 @@ struct GitHubRelease: Decodable, Equatable {
 
 enum UpdateError: LocalizedError {
     case invalidRepository
+    case invalidDeveloperFeed
     case invalidVersion
     case noPublishedRelease
     case unavailable
@@ -538,6 +637,8 @@ enum UpdateError: LocalizedError {
         switch self {
         case .invalidRepository:
             return "The GitHub update feed is invalid."
+        case .invalidDeveloperFeed:
+            return "The developer update feed must use HTTP on this Mac only."
         case .invalidVersion:
             return "The published release does not use a supported version number."
         case .noPublishedRelease:

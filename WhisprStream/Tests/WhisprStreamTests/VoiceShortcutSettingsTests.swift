@@ -241,4 +241,19 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         let settings = Settings(defaults: defaults)
         XCTAssertTrue(settings.voiceShortcuts.isEmpty)
     }
+
+    func testMalformedVocabularyStorageIsNotOverwrittenDuringInitialization() {
+        let defaults = makeDefaults()
+        let malformed = ["unexpected": true]
+        defaults.set(malformed, forKey: "vocabularyEntries")
+        defaults.set("Legacy term", forKey: "contextTerms")
+
+        let settings = Settings(defaults: defaults)
+
+        XCTAssertTrue(settings.vocabularyEntries.isEmpty)
+        XCTAssertEqual(
+            defaults.dictionary(forKey: "vocabularyEntries") as? [String: Bool],
+            malformed
+        )
+    }
 }

@@ -86,6 +86,138 @@ final class AppUpdateManagerTests: XCTestCase {
         )
     }
 
+#if DEBUG
+    func testDeveloperFeedAcceptsOnlyLoopbackHTTPAssetsWhenExplicitlyEnabled() throws {
+        let archiveURL = URL(string: "http://127.0.0.1:8765/WhisprStream-macos-arm64.zip")!
+        let signatureURL = URL(
+            string: "http://localhost:8765/WhisprStream-macos-arm64.zip.ed25519"
+        )!
+        let localRelease = release(assets: [
+            GitHubRelease.Asset(
+                name: AppUpdateManager.archiveAssetName,
+                downloadURL: archiveURL,
+                size: 100
+            ),
+            GitHubRelease.Asset(
+                name: AppUpdateManager.signatureAssetName,
+                downloadURL: signatureURL,
+                size: 89
+            ),
+        ])
+
+        XCTAssertThrowsError(
+            try AppUpdateManager.release(from: localRelease, currentVersion: "1.0.1")
+        )
+        XCTAssertNoThrow(
+            try AppUpdateManager.release(
+                from: localRelease,
+                currentVersion: "1.0.1",
+                allowDeveloperAssetURLs: true
+            )
+        )
+        XCTAssertTrue(AppUpdateManager.isLocalDeveloperURL(archiveURL))
+        XCTAssertTrue(AppUpdateManager.isLocalDeveloperURL(signatureURL))
+        XCTAssertFalse(AppUpdateManager.isLocalDeveloperURL(URL(string: "https://127.0.0.1/a")!))
+        XCTAssertFalse(AppUpdateManager.isLocalDeveloperURL(URL(string: "http://example.com/a")!))
+        XCTAssertFalse(AppUpdateManager.isLocalDeveloperURL(URL(string: "http://user@localhost/a")!))
+    }
+
+    func testFetchLatestReleaseCanUseDeveloperFeed() async throws {
+        let feedURL = URL(string: "http://127.0.0.1:8765/latest.json")!
+        MockUpdateURLProtocol.responses = [feedURL: Data("""
+        {
+          "tag_name": "v1.0.2",
+          "html_url": "https://github.com/Leo6Leo/whispr-stream/releases/tag/v1.0.2",
+          "draft": false,
+          "prerelease": false,
+          "assets": []
+        }
+        """.utf8)]
+        defer { MockUpdateURLProtocol.responses = [:] }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockUpdateURLProtocol.self]
+
+        let fetched = try await AppUpdateManager.fetchLatestRelease(
+            for: "Leo6Leo/whispr-stream",
+            session: URLSession(configuration: configuration),
+            developerFeedURL: feedURL
+        )
+
+        XCTAssertEqual(fetched.tagName, "v1.0.2")
+        do {
+            _ = try await AppUpdateManager.fetchLatestRelease(
+                for: "Leo6Leo/whispr-stream",
+                session: URLSession(configuration: configuration),
+                developerFeedURL: URL(string: "http://example.com/latest.json")!
+            )
+            XCTFail("Expected a non-loopback developer feed to be rejected")
+        } catch UpdateError.invalidDeveloperFeed {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    @MainActor
+    func testManagerDiscoversUpdateThroughDeveloperFeed() async throws {
+        let feedURL = URL(string: "http://127.0.0.1:8765/latest.json")!
+        let archiveURL = URL(string: "http://127.0.0.1:8765/WhisprStream-macos-arm64.zip")!
+        let signatureURL = URL(
+            string: "http://127.0.0.1:8765/WhisprStream-macos-arm64.zip.ed25519"
+        )!
+        MockUpdateURLProtocol.responses = [feedURL: Data("""
+        {
+          "tag_name": "v1.0.2",
+          "html_url": "https://github.com/Leo6Leo/whispr-stream/releases/tag/v1.0.2",
+          "draft": false,
+          "prerelease": false,
+          "assets": [
+            {"name": "\(AppUpdateManager.archiveAssetName)", "browser_download_url": "\(archiveURL.absoluteString)", "size": 100},
+            {"name": "\(AppUpdateManager.signatureAssetName)", "browser_download_url": "\(signatureURL.absoluteString)", "size": 89}
+          ]
+        }
+        """.utf8)]
+        defer { MockUpdateURLProtocol.responses = [:] }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockUpdateURLProtocol.self]
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let manager = AppUpdateManager(
+            repository: "Leo6Leo/whispr-stream",
+            currentVersion: "1.0.1",
+            bundleIdentifier: "com.leoleo.whisprstream",
+            publicKey: key,
+            appBundleURL: URL(fileURLWithPath: "/tmp/WhisprStream.app"),
+            session: URLSession(configuration: configuration),
+            developerFeedURL: feedURL
+        )
+
+        manager.checkForUpdates()
+        for _ in 0..<100 {
+            if case .available = manager.status { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        guard case let .available(update) = manager.status else {
+            return XCTFail("Expected a locally discovered update, got \(manager.status)")
+        }
+        XCTAssertEqual(update.version, "1.0.2")
+        XCTAssertEqual(update.archiveURL, archiveURL)
+    }
+
+    func testDeveloperFeedEnvironmentOverrideIsDebugOnlyAndRequiresAURL() {
+        XCTAssertEqual(
+            AppUpdateManager.developerFeedURLFromEnvironment([
+                "WHISPR_UPDATE_FEED_URL": " http://127.0.0.1:8765/latest.json "
+            ]),
+            URL(string: "http://127.0.0.1:8765/latest.json")
+        )
+        XCTAssertNil(AppUpdateManager.developerFeedURLFromEnvironment([:]))
+        XCTAssertNil(AppUpdateManager.developerFeedURLFromEnvironment([
+            "WHISPR_UPDATE_FEED_URL": "http://["
+        ]))
+    }
+#endif
+
     func testEd25519SignatureAcceptsExactArchiveAndRejectsTampering() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("WhisprStreamUpdateTests-\(UUID().uuidString)")
@@ -169,6 +301,29 @@ final class AppUpdateManagerTests: XCTestCase {
         XCTAssertFalse(AppUpdateManager.isValidPublicKey(nil))
         XCTAssertFalse(AppUpdateManager.isValidPublicKey(Data(repeating: 0, count: 31).base64EncodedString()))
         XCTAssertFalse(AppUpdateManager.isValidPublicKey("not-base64"))
+    }
+
+    func testUpdateTrustRootEnvironmentOverridesAreDebugOnly() {
+        let environment = [
+            "WHISPR_UPDATE_REPOSITORY": "attacker/repository",
+            "WHISPR_UPDATE_PUBLIC_KEY": "attacker-key",
+        ]
+        let repository = AppUpdateManager.configuredUpdateRepository(
+            bundleValue: "Leo6Leo/whispr-stream",
+            environment: environment
+        )
+        let key = AppUpdateManager.configuredUpdatePublicKey(
+            bundleValue: "pinned-key",
+            environment: environment
+        )
+
+#if DEBUG
+        XCTAssertEqual(repository, "attacker/repository")
+        XCTAssertEqual(key, "attacker-key")
+#else
+        XCTAssertEqual(repository, "Leo6Leo/whispr-stream")
+        XCTAssertEqual(key, "pinned-key")
+#endif
     }
 
     func testDownloadVerifiesExtractsAndValidatesReplacement() async throws {

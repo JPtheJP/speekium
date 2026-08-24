@@ -28,6 +28,23 @@ New files:
 The SwiftPM test target runs with `swift test`; real-voice recognition QA on
 both supported models remains a manual follow-up.
 
+## Recording shortcuts
+
+The app stores the recording shortcut as JSON in the versioned
+triggerShortcut.v1 UserDefaults key. It preserves the observed physical
+key code, the logical Command/Control/Option/Shift modifiers, and a semantic
+label for printable, named, and function keys. Existing triggerKey values
+for Right/Left Option, Right Command, Right Control, and Fn migrate
+automatically; Right Option is the fallback when both settings are invalid.
+
+The Settings and onboarding recorder uses a local first-responder AppKit view.
+While it is active, HotKeyMonitor removes both its global and local event
+monitors, so recording or saving a new shortcut cannot start dictation. The
+monitor listens to .flagsChanged for legacy modifier-only shortcuts and to
+.keyDown/.keyUp for chords and F13–F24. Chord matching compares only the
+four logical modifiers exactly; hold mode also stops if a required modifier
+is released before the primary key.
+
 On-device dictation for macOS that handles **Chinese and English mixed in one
 sentence**. Built on an M1 Max / 32 GB, macOS 26.5, Swift 6.2.
 
@@ -38,7 +55,7 @@ after you stop talking.
 
 ## Current state: working
 
-A native SwiftUI menu-bar app. Hold (or tap) a trigger key, speak, and the
+A native SwiftUI menu-bar app. Hold (or tap) a recording shortcut, speak, and the
 transcript appears at the cursor. A floating HUD shows text **while you speak**.
 
 Measured on the user's own voice, 12 s of mixed zh/en audio:
@@ -104,7 +121,9 @@ whispr-stream/
         ├── AppState.swift           # Phase enum + observable HUD state
         ├── ASRService.swift         # sidecar process + JSON protocol
         ├── AudioCapture.swift       # AVAudioEngine → 16 kHz mono Int16
-        ├── HotKeyMonitor.swift      # global .flagsChanged, hold/tap modes
+        ├── TriggerShortcut.swift    # versioned shortcut model, validation, display
+        ├── TriggerShortcutRecorder.swift # local AppKit recorder and SwiftUI editor
+        ├── HotKeyMonitor.swift      # global flags/key events, hold/tap modes
         ├── TextInserter.swift       # pasteboard + synthetic ⌘V
         ├── HUDPanel.swift           # non-activating floating NSPanel
         ├── HUDView.swift            # the capsule, waveform, transitions
@@ -135,6 +154,16 @@ The test launches a temporary editor process and drives the signed development
 app's real keyboard/clipboard fallback, targeting that process directly so it
 also works in headless CI sessions. WhisprStream must already be allowed in
 System Settings → Privacy & Security → Accessibility.
+
+Run the packaged recording-shortcut E2E:
+
+    WhisprStream/e2e-trigger-shortcut.sh
+
+This builds the 1.0.1 build 3 development artifact, verifies its embedded
+bundle version, launches the packaged executable directly, and checks
+candidate capture, migration, persistence, hold/tap matching, F13 handling,
+modifier-release safety, suspension/rebinding, and coach copy. Physical
+programmable-keyboard delivery for F21–F24 remains manual QA.
 
 `build.sh` hardcodes the venv python into `Info.plist` as `WhisprPythonPath`.
 Override with `PYTHON=/path/to/python WhisprStream/build.sh`.

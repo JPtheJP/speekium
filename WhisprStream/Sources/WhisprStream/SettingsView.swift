@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Native macOS settings with a permanently visible labeled sidebar.
@@ -181,11 +182,7 @@ private struct GeneralTab: View {
                 }
                 .pickerStyle(.segmented)
 
-                Picker("Trigger key", selection: $settings.triggerKey) {
-                    ForEach(TriggerKey.allCases) { key in
-                        Text("\(key.symbol)  \(key.label)").tag(key)
-                    }
-                }
+                TriggerShortcutEditor(settings: settings)
             } header: {
                 Text("Dictation")
             } footer: {
@@ -266,6 +263,7 @@ private struct GeneralTab: View {
 private struct ModelTab: View {
     @ObservedObject var settings: Settings
     @StateObject private var downloader = ModelDownloader()
+    @State private var isAddingCustomModel = false
 
     /// Bumped to force a re-read of the cache. Not a cache of the result:
     /// `TabView` builds more than one `ModelTab`, and `@State` filled by
@@ -276,14 +274,24 @@ private struct ModelTab: View {
     var body: some View {
         Form {
             Section {
-                ForEach(ASRModel.allCases) { model in
+                ForEach(settings.availableModels) { model in
                     ModelRow(
                         model: model,
                         state: installState(model),
                         isSelected: settings.model == model,
                         downloader: downloader,
-                        select: { settings.model = model }
+                        select: { settings.model = model },
+                        forget: model.isBuiltIn
+                            ? nil
+                            : { settings.forgetCustomModel(model) }
                     )
+                }
+                if FeatureFlags.optionalModelsEnabled {
+                    Button {
+                        isAddingCustomModel = true
+                    } label: {
+                        Label("Add Custom Model…", systemImage: "plus.circle")
+                    }
                 }
             } header: {
                 Text("Speech model")
@@ -296,8 +304,10 @@ private struct ModelTab: View {
                         }
                     } else if let failure = downloader.failure {
                         Text(failure).foregroundStyle(.red)
+                    } else if FeatureFlags.optionalModelsEnabled {
+                        Text("Switching models restarts the speech engine and reloads its weights. Add a compatible Qwen3-ASR or MLX Whisper repository, or use a converted model folder already on this Mac.")
                     } else {
-                        Text("Switching models restarts the speech engine and reloads the weights, which takes a couple of seconds. Everything stays on this Mac.")
+                        Text("Switching models restarts the speech engine and reloads its weights.")
                     }
                     Text(ModelCatalog.hardwareGuidance)
                 }
@@ -312,6 +322,11 @@ private struct ModelTab: View {
             for: NSApplication.didBecomeActiveNotification)) { _ in reloadToken &+= 1 }
         .task {
             downloader.onFinish = { _, _ in reloadToken &+= 1 }
+        }
+        .sheet(isPresented: $isAddingCustomModel) {
+            if FeatureFlags.optionalModelsEnabled {
+                AddCustomModelView(settings: settings)
+            }
         }
         .alert(
             "Clear partial model data?",
@@ -346,12 +361,26 @@ private struct ModelRow: View {
     let isSelected: Bool
     @ObservedObject var downloader: ModelDownloader
     let select: () -> Void
+    let forget: (() -> Void)?
 
     private var isDownloading: Bool { downloader.active == model }
 
     var body: some View {
         LabeledContent {
-            trailing
+            HStack(spacing: 10) {
+                trailing
+                if let forget {
+                    Menu {
+                        Button("Forget Model", role: .destructive, action: forget)
+                            .disabled(isDownloading)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Custom model options")
+                }
+            }
         } label: {
             Text(model.label)
             Text(model.detail)
@@ -403,7 +432,7 @@ private struct ModelRow: View {
             } else {
                 Button("Use", action: select)
             }
-        } else {
+        } else if model.isDownloadable {
             VStack(alignment: .trailing, spacing: 3) {
                 Button("Download") { downloader.start(model) }
                     .disabled(downloader.isRunning)
@@ -417,6 +446,10 @@ private struct ModelRow: View {
                         .controlSize(.small)
                 }
             }
+        } else {
+            Label("Folder unavailable", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
         }
     }
 
@@ -438,6 +471,112 @@ private struct ModelRow: View {
             return "\(model.approximateSize) · \(ModelCatalog.formatted(bytes: bytes)) unused on disk"
         }
         return model.approximateSize
+    }
+}
+
+private struct AddCustomModelView: View {
+    @ObservedObject var settings: Settings
+    @Environment(\.dismiss) private var dismiss
+    @State private var engine: ASREngine = .whisper
+    @State private var source: ASRModelSource = .huggingFace
+    @State private var location = ""
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section("Model format") {
+                    Picker("Engine", selection: $engine) {
+                        ForEach(ASREngine.allCases) { value in
+                            Text(value.label).tag(value)
+                        }
+                    }
+                    Text(engine.detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Model source") {
+                    Picker("Source", selection: $source) {
+                        ForEach(ASRModelSource.allCases) { value in
+                            Text(value.label).tag(value)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if source == .huggingFace {
+                        TextField("Model id (owner/model)", text: $location)
+                            .textFieldStyle(.roundedBorder)
+                        Text(engine == .whisper
+                             ? "Example: mlx-community/whisper-small-mlx"
+                             : "Use a complete Qwen3-ASR checkpoint or compatible fine-tune.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        HStack {
+                            TextField("Model folder", text: $location)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Choose…", action: chooseFolder)
+                        }
+                    }
+
+                    if let failure {
+                        Text(failure)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+
+            Divider()
+            HStack {
+                Text("Custom models run locally and are never uploaded by WhisprStream.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add Model", action: addModel)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding()
+        }
+        .frame(width: 520, height: 390)
+        .onChange(of: engine) { failure = nil }
+        .onChange(of: source) {
+            location = ""
+            failure = nil
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = "Choose Model"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        location = url.path
+        failure = nil
+    }
+
+    private func addModel() {
+        do {
+            let added = try settings.addCustomModel(
+                engine: engine,
+                source: source,
+                location: location
+            )
+            if ModelCatalog.state(for: added).isInstalled {
+                settings.model = added
+            }
+            dismiss()
+        } catch {
+            failure = error.localizedDescription
+        }
     }
 }
 

@@ -13,7 +13,13 @@ SOURCE_PYTHON="${SOURCE_PYTHON:?set SOURCE_PYTHON to a standalone Python 3.12 ex
 RUNTIME_VERSION="${RUNTIME_VERSION:-${VERSION:?set RUNTIME_VERSION, e.g. 1.0.0}}"
 OUTPUT="${OUTPUT:-$PROJECT_ROOT/WhisprStream-runtime-$RUNTIME_VERSION-arm64.zip}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
-DEPENDENCY_SET="${DEPENDENCY_SET:-mlx-qwen3-asr-0.3.5}"
+SIGNING_CERT_SHA1_FILE="$PROJECT_ROOT/WhisprStream/release-signing-certificate-sha1.txt"
+PINNED_SIGNING_CERT_SHA1=""
+if [ -f "$SIGNING_CERT_SHA1_FILE" ]; then
+    PINNED_SIGNING_CERT_SHA1="$(tr -d '\r\n' < "$SIGNING_CERT_SHA1_FILE" \
+        | tr '[:upper:]' '[:lower:]')"
+fi
+DEPENDENCY_SET="${DEPENDENCY_SET:-mlx-qwen3-asr-0.3.5+mlx-whisper-0.4.3}"
 RUNTIME_MINIMUM_MACOS="${RUNTIME_MINIMUM_MACOS:-14.0}"
 RELEASE="${RELEASE:-1}"
 STAGING="$(mktemp -d "${TMPDIR:-/tmp}/whisprstream-runtime.XXXXXX")"
@@ -36,6 +42,10 @@ file "$SOURCE_PYTHON" | grep -q 'arm64' || {
 }
 if [ "$RELEASE" = "1" ] && { [ -z "$SIGNING_IDENTITY" ] || [ "$SIGNING_IDENTITY" = "-" ]; }; then
     echo "error: RELEASE=1 requires SIGNING_IDENTITY; ad-hoc signing is not allowed" >&2
+    exit 1
+fi
+if [ "$RELEASE" = "1" ] && ! [[ "$PINNED_SIGNING_CERT_SHA1" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "error: release signing-certificate pin is missing or malformed" >&2
     exit 1
 fi
 
@@ -80,6 +90,18 @@ SITE_PACKAGES="$RUNTIME/lib/python3.12/site-packages"
     --upgrade \
     --target "$SITE_PACKAGES" \
     -r "$PROJECT_ROOT/requirements-macos-arm64.txt"
+"$RUNTIME_PYTHON" -m pip install \
+    --disable-pip-version-check \
+    --no-cache-dir \
+    --no-deps \
+    --platform "macosx_${RUNTIME_MINIMUM_MACOS/./_}_arm64" \
+    --implementation cp \
+    --python-version 3.12 \
+    --abi cp312 \
+    --only-binary=:all: \
+    --upgrade \
+    --target "$SITE_PACKAGES" \
+    -r "$PROJECT_ROOT/requirements-macos-arm64-nodeps.txt"
 
 # The release is code-signed after this script runs. Removing bytecode caches
 # and pip's cache makes the archive smaller without removing runtime content.
@@ -90,6 +112,7 @@ MLX_VERSION="$(awk -F== '$1 == "mlx" {print $2}' "$PROJECT_ROOT/requirements-mac
 NUMPY_VERSION="$(awk -F== '$1 == "numpy" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64.txt")"
 HF_VERSION="$(awk -F== '$1 == "huggingface-hub" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64.txt")"
 ASR_VERSION="$(awk -F== '$1 == "mlx-qwen3-asr" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64.txt")"
+WHISPER_VERSION="$(awk -F== '$1 == "mlx-whisper" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64-nodeps.txt")"
 INSTALLED_BYTES="$(du -sk "$RUNTIME" | awk '{print $1 * 1024}')"
 cat > "$RUNTIME/manifest.json" <<MANIFEST
 {
@@ -104,14 +127,15 @@ cat > "$RUNTIME/manifest.json" <<MANIFEST
     "mlx": "$MLX_VERSION",
     "numpy": "$NUMPY_VERSION",
     "huggingface-hub": "$HF_VERSION",
-    "mlx-qwen3-asr": "$ASR_VERSION"
+    "mlx-qwen3-asr": "$ASR_VERSION",
+    "mlx-whisper": "$WHISPER_VERSION"
   }
 }
 MANIFEST
 
 echo "▸ validating relocatability and imports"
 PYTHONNOUSERSITE=1 PYTHONPATH= PYTHONHOME= VIRTUAL_ENV= \
-    "$RUNTIME_PYTHON" -s -u -c 'import mlx, numpy, huggingface_hub, mlx_qwen3_asr; print("health check: ok")'
+    "$RUNTIME_PYTHON" -s -u -c 'import mlx, numpy, huggingface_hub, mlx_qwen3_asr, mlx_whisper; print("health check: ok")'
 for SOURCE_PATH in "$SOURCE_PREFIX" "$PROJECT_ROOT"; do
     if rg -a -F -l --hidden --no-messages "$SOURCE_PATH" "$RUNTIME" >/dev/null; then
         echo "error: runtime contains build-machine path $SOURCE_PATH" >&2
@@ -139,7 +163,8 @@ if [ "$RELEASE" = "1" ]; then
     done < <(find "$RUNTIME" -type f -print0 | xargs -0 file | awk -F: '/Mach-O/ {print $1}')
 
     while IFS= read -r FILE; do
-        codesign --verify --strict "$FILE"
+        codesign --verify --strict \
+            -R="certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" "$FILE"
     done < <(find "$RUNTIME" -type f -print0 | xargs -0 file | awk -F: '/Mach-O/ {print $1}')
 fi
 

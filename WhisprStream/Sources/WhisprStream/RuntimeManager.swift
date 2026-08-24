@@ -8,13 +8,25 @@ struct RuntimeHealthError: Error {
 struct RuntimeHealthCheck {
     static let timeout: TimeInterval = 20
 
-    static func run(python: URL, manifest: RuntimeManifest) async -> Result<Void, RuntimeHealthError> {
+    static func run(
+        python: URL,
+        manifest: RuntimeManifest,
+        includeOptionalModels: Bool = FeatureFlags.optionalModelsEnabled
+    ) async -> Result<Void, RuntimeHealthError> {
         await Task.detached(priority: .utility) {
-            runSynchronously(python: python, manifest: manifest)
+            runSynchronously(
+                python: python,
+                manifest: manifest,
+                includeOptionalModels: includeOptionalModels
+            )
         }.value
     }
 
-    static func runSynchronously(python: URL, manifest: RuntimeManifest) -> Result<Void, RuntimeHealthError> {
+    static func runSynchronously(
+        python: URL,
+        manifest: RuntimeManifest,
+        includeOptionalModels: Bool = FeatureFlags.optionalModelsEnabled
+    ) -> Result<Void, RuntimeHealthError> {
         let expectedJSON: String
         if let data = try? JSONSerialization.data(withJSONObject: manifest.dependencyVersions),
            let value = String(data: data, encoding: .utf8) {
@@ -22,10 +34,20 @@ struct RuntimeHealthCheck {
         } else {
             return .failure(RuntimeHealthError(message: "The speech engine dependency manifest is invalid."))
         }
+        let requiredJSON: String
+        let requiredModules = FeatureFlags.requiredRuntimeModules(
+            includeOptionalModels: includeOptionalModels
+        )
+        if let data = try? JSONSerialization.data(withJSONObject: requiredModules),
+           let value = String(data: data, encoding: .utf8) {
+            requiredJSON = value
+        } else {
+            return .failure(RuntimeHealthError(message: "The speech engine dependency requirements are invalid."))
+        }
 
         let code = """
         import importlib, importlib.metadata, json, sys
-        required = {"mlx": "mlx", "numpy": "numpy", "huggingface_hub": "huggingface-hub", "mlx_qwen3_asr": "mlx-qwen3-asr"}
+        required = \(requiredJSON)
         expected = \(expectedJSON)
         if tuple(sys.version_info[:2]) != (3, 12):
             raise RuntimeError("Python 3.12 is required")

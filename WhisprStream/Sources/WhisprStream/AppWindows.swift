@@ -51,10 +51,10 @@ final class AppWindows {
 
     // MARK: - First dictation coach
 
-    func showFirstDictationCoach(key: TriggerKey, mode: ActivationMode) {
+    func showFirstDictationCoach(shortcut: TriggerShortcut, mode: ActivationMode) {
         dismissFirstDictationCoach(animated: false)
 
-        let coach = FirstDictationCoachPanel(key: key, mode: mode)
+        let coach = FirstDictationCoachPanel(shortcut: shortcut, mode: mode)
         firstDictationCoach = coach
         coach.present()
 

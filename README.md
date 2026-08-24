@@ -18,7 +18,7 @@ WhisprStream is an open-source macOS dictation app that types at your cursor whi
 - Multilingual dictation: switch languages mid-sentence, without being limited to Chinese and English—or to two languages at a time
 - Custom vocabulary for names, technical terms, and jargon
 - Voice shortcuts that expand a spoken phrase into a URL, signature, address, reusable reply, or any text you type often
-- Bring your own compatible ASR model, including base or fine-tuned checkpoints
+- A configurable recording shortcut, including custom modifier chords and F13–F24
 - Non-streaming models can still produce a live preview: WhisprStream repeatedly re-reads the growing utterance and settles the stable words
 - No account, server, or audio upload
 
@@ -28,7 +28,7 @@ WhisprStream is an open-source macOS dictation app that types at your cursor whi
 
 - macOS 14 or later
 - Apple silicon Mac
-- Approximately 3 GB free for the speech engine and recommended 0.6B model
+- Approximately 4 GB free for the speech engine and recommended 0.6B model
 
 ### Download and first launch
 
@@ -39,6 +39,10 @@ WhisprStream is an open-source macOS dictation app that types at your cursor whi
 5. Grant Microphone and Accessibility access, or finish those steps later from **Settings → Permissions**.
 
 The native app, speech engine, and model are separate. The engine and model are downloaded only when needed, remain on your Mac, and survive normal app updates. No Python, Homebrew, pip, Xcode, Terminal, account, or audio upload is required. See the full [installation and recovery guide](INSTALL.md).
+
+### Experimental optional models
+
+Custom Qwen3-ASR and MLX Whisper models are still under development. They are behind a compile-time feature gate and are not available in the public 1.0.1 build. Local source builds enable the experimental UI by default; use `ENABLE_OPTIONAL_MODELS=0 WhisprStream/build.sh` to reproduce the public behavior.
 
 ### Interrupted downloads and repair
 
@@ -68,11 +72,11 @@ Source builds use the prepared local development engine and show **Development e
 WHISPR_TEST_FIRST_RUN=1 WhisprStream.app/Contents/MacOS/WhisprStream
 ```
 
-Hold the Right Option key, speak, and release; the transcript is inserted into the active app.
+Hold the Right Option key, speak, and release; the transcript is inserted into the active app. To choose another trigger, open **Settings → General → Recording shortcut** and record a modifier chord or F13–F24. Right Option remains the default.
 
 ## Open source and model flexibility
 
-WhisprStream is MIT licensed and designed to be inspected, adapted, and extended. The default app offers Qwen3-ASR models, but the ASR sidecar is replaceable: add a compatible local model or fine-tuned checkpoint and keep the rest of the dictation workflow. A model does not need native streaming support. WhisprStream can repeatedly transcribe the full utterance, preserve context across language switches, and turn stable output into a live stream.
+WhisprStream is MIT licensed and designed to be inspected, adapted, and extended. The public 1.0.1 app offers the built-in Qwen3-ASR models. Experimental adapters for custom Qwen3-ASR and MLX Whisper checkpoints remain available to source-build developers behind a compile-time gate. A model does not need native streaming support: WhisprStream can repeatedly transcribe the full utterance, preserve context across language switches, and turn stable output into a live stream.
 
 The native Swift front end and Python ASR sidecar communicate locally over a small newline-delimited JSON protocol. See [HANDOFF.md](HANDOFF.md) for architecture notes and troubleshooting.
 
