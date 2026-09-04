@@ -64,14 +64,11 @@ final class LegacyPreferencesMigrationTests: XCTestCase {
             )
         )
 
-        // Detection and planning are read-only; only the explicit apply step
-        // represents the user's confirmation click.
+        // Detection and planning remain read-only until startup applies them.
         XCTAssertEqual(
             defaults.array(forKey: "vocabularyEntries") as? [String],
             ["Release term", "Shared term"]
         )
-        XCTAssertFalse(defaults.bool(forKey: LegacyPreferencesMigration.completionKey))
-
         LegacyPreferencesMigration.apply(plan, to: defaults)
 
         XCTAssertEqual(
@@ -89,7 +86,6 @@ final class LegacyPreferencesMigrationTests: XCTestCase {
         XCTAssertEqual(merged[1].isEnabled, developmentShortcut.isEnabled)
         XCTAssertNotEqual(merged[1].id, developmentShortcut.id)
         XCTAssertEqual(defaults.string(forKey: "model"), "Qwen/Qwen3-ASR-1.7B")
-        XCTAssertTrue(defaults.bool(forKey: LegacyPreferencesMigration.completionKey))
         XCTAssertEqual(
             plan.summary,
             LegacyPreferencesMigrationSummary(
@@ -101,7 +97,7 @@ final class LegacyPreferencesMigrationTests: XCTestCase {
         )
     }
 
-    func testMigrationRunsOnlyOnceEvenIfDevelopmentDataLaterChanges() throws {
+    func testMergeRunsAgainWhenCounterpartLaterAddsContent() throws {
         let defaults = makeDefaults()
         let firstSource: [String: Any] = ["vocabularyEntries": ["First term"]]
 
@@ -110,14 +106,49 @@ final class LegacyPreferencesMigrationTests: XCTestCase {
             sourceDomain: firstSource
         ))
         LegacyPreferencesMigration.apply(plan, to: defaults)
+        let secondPlan = try XCTUnwrap(LegacyPreferencesMigration.prepareIfNeeded(
+            destination: defaults,
+            sourceDomain: ["vocabularyEntries": ["First term", "Later term"]]
+        ))
+        LegacyPreferencesMigration.apply(secondPlan, to: defaults)
+        XCTAssertEqual(
+            defaults.array(forKey: "vocabularyEntries") as? [String],
+            ["First term", "Later term"]
+        )
         XCTAssertNil(try LegacyPreferencesMigration.prepareIfNeeded(
             destination: defaults,
             sourceDomain: ["vocabularyEntries": ["First term", "Later term"]]
         ))
+    }
+
+    func testOldCompletionMarkerDoesNotBlockNewAdditions() throws {
+        let defaults = makeDefaults()
+        defaults.set(true, forKey: LegacyPreferencesMigration.completionKey)
+        defaults.set(["Existing term"], forKey: "vocabularyEntries")
+
+        let plan = try XCTUnwrap(LegacyPreferencesMigration.prepareIfNeeded(
+            destination: defaults,
+            sourceDomain: ["vocabularyEntries": ["Existing term", "New term"]]
+        ))
+
+        XCTAssertEqual(plan.vocabulary, ["Existing term", "New term"])
+        XCTAssertEqual(plan.summary.vocabularyAdded, 1)
+    }
+
+    func testFindsCounterpartForDevelopmentAndReleaseBuilds() {
         XCTAssertEqual(
-            defaults.array(forKey: "vocabularyEntries") as? [String],
-            ["First term"]
+            LegacyPreferencesMigration.counterpartDomain(
+                for: LegacyPreferencesMigration.releaseBundleIdentifier
+            ),
+            LegacyPreferencesMigration.legacyDevelopmentDomain
         )
+        XCTAssertEqual(
+            LegacyPreferencesMigration.counterpartDomain(
+                for: LegacyPreferencesMigration.legacyDevelopmentDomain
+            ),
+            LegacyPreferencesMigration.releaseBundleIdentifier
+        )
+        XCTAssertNil(LegacyPreferencesMigration.counterpartDomain(for: "example.test"))
     }
 
     func testUnrelatedDevelopmentSettingsDoNotTriggerMigration() throws {

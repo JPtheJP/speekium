@@ -20,14 +20,14 @@ enum LegacyPreferencesMigrationError: Error {
     case invalidCurrentShortcuts
 }
 
-/// Imports user-authored content from the old development preferences domain.
-///
-/// This is deliberately a one-way, one-time migration rather than a sync. The
-/// release domain always wins conflicts, and the development domain is never
-/// changed or deleted.
+/// Keeps user-authored content available when alternating between development
+/// and release builds. Each launch imports additions from the other domain;
+/// the current domain wins shortcut conflicts and neither source is deleted.
 enum LegacyPreferencesMigration {
     static let releaseBundleIdentifier = "com.leoleo.whisprstream"
     static let legacyDevelopmentDomain = "dev.local.whisprstream"
+    /// Retained so installations that completed the old one-time import remain
+    /// readable. Continuous merge deliberately ignores this marker.
     static let completionKey = "legacyDevelopmentContentMigration.v1"
 
     private enum Keys {
@@ -40,31 +40,39 @@ enum LegacyPreferencesMigration {
         bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "",
         destination: UserDefaults = .standard
     ) throws -> LegacyPreferencesMigrationPlan? {
-        guard bundleIdentifier == releaseBundleIdentifier,
-              let sourceDomain = destination.persistentDomain(
-                  forName: legacyDevelopmentDomain
-              ) else { return nil }
+        guard let sourceName = counterpartDomain(for: bundleIdentifier),
+              let sourceDomain = destination.persistentDomain(forName: sourceName)
+        else { return nil }
         return try prepareIfNeeded(
             destination: destination,
             sourceDomain: sourceDomain
         )
     }
 
+    static func counterpartDomain(for bundleIdentifier: String) -> String? {
+        switch bundleIdentifier {
+        case releaseBundleIdentifier:
+            return legacyDevelopmentDomain
+        case legacyDevelopmentDomain:
+            return releaseBundleIdentifier
+        default:
+            return nil
+        }
+    }
+
     /// Builds an immutable merge plan without changing either preferences
-    /// domain. The caller must obtain explicit user confirmation before apply.
+    /// domain. Startup applies it only when the counterpart has new content.
     static func prepareIfNeeded(
         destination: UserDefaults,
         sourceDomain: [String: Any]
     ) throws -> LegacyPreferencesMigrationPlan? {
-        guard !destination.bool(forKey: completionKey) else { return nil }
-
         let hasVocabulary = sourceDomain[Keys.vocabularyEntries] != nil
             || sourceDomain[Keys.contextTerms] != nil
         let hasShortcuts = sourceDomain[Keys.voiceShortcuts] != nil
         guard hasVocabulary || hasShortcuts else { return nil }
 
         // Decode and validate everything before writing anything, so malformed
-        // legacy data cannot leave the release domain half-migrated.
+        // counterpart data cannot leave the current domain half-merged.
         let importedVocabulary = try vocabulary(from: sourceDomain)
         let currentVocabulary = try vocabulary(from: destination)
         let currentShortcuts = try shortcuts(from: destination)
@@ -83,12 +91,14 @@ enum LegacyPreferencesMigration {
         )
         let encodedShortcuts = try JSONEncoder().encode(mergedShortcuts)
 
+        let vocabularyAdded = mergedVocabulary.count - currentVocabulary.count
         let shortcutsAdded = mergedShortcuts.count - currentShortcuts.count
+        guard vocabularyAdded > 0 || shortcutsAdded > 0 else { return nil }
         return LegacyPreferencesMigrationPlan(
             vocabulary: mergedVocabulary,
             encodedShortcuts: encodedShortcuts,
             summary: LegacyPreferencesMigrationSummary(
-                vocabularyAdded: mergedVocabulary.count - currentVocabulary.count,
+                vocabularyAdded: vocabularyAdded,
                 shortcutsAdded: shortcutsAdded,
                 shortcutConflictsSkipped: imported.shortcuts.count - shortcutsAdded,
                 invalidShortcutsSkipped: imported.invalidCount
@@ -102,7 +112,6 @@ enum LegacyPreferencesMigration {
     ) {
         destination.set(plan.vocabulary, forKey: Keys.vocabularyEntries)
         destination.set(plan.encodedShortcuts, forKey: Keys.voiceShortcuts)
-        destination.set(true, forKey: completionKey)
     }
 
     private static func vocabulary(from domain: [String: Any]) throws -> [String] {

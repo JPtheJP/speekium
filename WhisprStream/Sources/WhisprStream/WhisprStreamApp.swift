@@ -85,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The updater retains its rollback copy until this process proves that
         // AppKit reached the application delegate and stays alive briefly.
         UpdateLaunchHealth.signalIfRequested()
-        offerLegacyContentMigrationIfNeeded()
+        mergeCrossBuildContentIfNeeded()
         panel = HUDPanel(state: state)
         state.onDictationLimitReached = { [weak self] in
             guard let self else { return }
@@ -125,59 +125,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func offerLegacyContentMigrationIfNeeded() {
-        let plan: LegacyPreferencesMigrationPlan
+    private func mergeCrossBuildContentIfNeeded() {
         do {
             guard let pending = try LegacyPreferencesMigration.pendingPlan() else { return }
-            plan = pending
+            LegacyPreferencesMigration.apply(pending)
+            let summary = pending.summary
+            Log.write(
+                "cross-build content merge completed: "
+                    + "vocabularyAdded=\(summary.vocabularyAdded) "
+                    + "shortcutsAdded=\(summary.shortcutsAdded) "
+                    + "shortcutConflictsSkipped=\(summary.shortcutConflictsSkipped) "
+                    + "invalidShortcutsSkipped=\(summary.invalidShortcutsSkipped)"
+            )
         } catch {
-            // Detection is read-only. If either domain has an unexpected shape,
-            // preserve both and leave the completion marker unset for recovery.
-            Log.write("legacy content migration detection failed: \(error)")
-            return
+            // A malformed counterpart must never overwrite the current domain.
+            Log.write("cross-build content merge failed: \(error)")
         }
-
-        let summary = plan.summary
-        var details = "WhisprStream found data saved by a development build. "
-            + "It can add \(summary.vocabularyAdded) vocabulary "
-            + (summary.vocabularyAdded == 1 ? "entry" : "entries")
-            + " and \(summary.shortcutsAdded) Voice "
-            + (summary.shortcutsAdded == 1 ? "Shortcut" : "Shortcuts")
-            + " to this release.\n\n"
-            + "Your current release data will be kept, and the development "
-            + "data will not be changed or deleted."
-        if summary.shortcutConflictsSkipped > 0 {
-            details += "\n\n\(summary.shortcutConflictsSkipped) shortcut "
-                + (summary.shortcutConflictsSkipped == 1 ? "conflict" : "conflicts")
-                + " will keep the current release replacement."
-        }
-        if summary.invalidShortcutsSkipped > 0 {
-            details += "\n\n\(summary.invalidShortcutsSkipped) invalid development "
-                + (summary.invalidShortcutsSkipped == 1 ? "shortcut" : "shortcuts")
-                + " cannot be imported."
-        }
-
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Import Vocabulary and Voice Shortcuts?"
-        alert.informativeText = details
-        alert.addButton(withTitle: "Import Data")
-        alert.addButton(withTitle: "Not Now")
-        NSApp.activate(ignoringOtherApps: true)
-
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            Log.write("legacy content migration deferred by user")
-            return
-        }
-
-        LegacyPreferencesMigration.apply(plan)
-        Log.write(
-            "legacy content migration completed: "
-                + "vocabularyAdded=\(summary.vocabularyAdded) "
-                + "shortcutsAdded=\(summary.shortcutsAdded) "
-                + "shortcutConflictsSkipped=\(summary.shortcutConflictsSkipped) "
-                + "invalidShortcutsSkipped=\(summary.invalidShortcutsSkipped)"
-        )
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -575,7 +538,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let normalizedText = SpokenSymbolNormalizer.normalize(
-                SpokenNumberNormalizer.normalize(text)
+                SpelledLetterNormalizer.normalize(
+                    SpokenNumberNormalizer.normalize(text)
+                )
             )
             let formattedText = TranscriptFormatter.format(
                 normalizedText,
