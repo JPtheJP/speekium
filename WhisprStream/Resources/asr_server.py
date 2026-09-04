@@ -20,8 +20,10 @@ prefix stable once two consecutive passes agree.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -72,6 +74,24 @@ PREVIEW_MAX_AUDIO_SEC = 12.0
 WINDOWED_PREVIEW_COOLDOWN_RATIO = 0.75
 WINDOWED_PREVIEW_MAX_COOLDOWN_SEC = 0.4
 
+# Qwen occasionally translates only the opening of a short monolingual phrase,
+# for example spoken English "let me take a look" becoming
+# "让我 take a look". The model already emits a primary audio language before
+# its transcript. For a small mixed-script result whose dominant script agrees
+# with that detected language, retry once with the same language fixed. The
+# candidate is accepted only if it removes conflicting script without collapsing
+# or expanding the phrase. Longer and genuinely ambiguous mixed speech stays on
+# the normal multilingual path.
+LANGUAGE_REPAIR_MAX_SEC = 4.0
+LANGUAGE_REPAIR_MAX_UNITS = 8
+LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)*")
+
+
+@dataclass(frozen=True)
+class DecodeResult:
+    text: str
+    language: str | None
+
 
 def emit(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -84,6 +104,92 @@ def commonprefix(a: str, b: str) -> str:
     while i < n and a[i] == b[i]:
         i += 1
     return a[:i]
+
+
+def normalize_detected_language(value: object) -> str | None:
+    """Return the canonical language names used by short-phrase repair."""
+    normalized = str(value or "").strip().casefold().replace("_", "-")
+    if normalized in {"english", "en"} or normalized.startswith("en-"):
+        return "English"
+    if normalized in {"chinese", "zh"} or normalized.startswith("zh-"):
+        return "Chinese"
+    return str(value).strip() if value else None
+
+
+def is_han_character(character: str) -> bool:
+    value = ord(character)
+    return (
+        0x3400 <= value <= 0x4DBF
+        or 0x4E00 <= value <= 0x9FFF
+        or 0xF900 <= value <= 0xFAFF
+        or 0x20000 <= value <= 0x3134F
+    )
+
+
+def transcript_script_units(text: str) -> tuple[int, int]:
+    """Return (Han characters, Latin words) for a bilingual transcript."""
+    han_characters = sum(1 for character in text if is_han_character(character))
+    latin_words = len(LATIN_WORD_RE.findall(text))
+    return han_characters, latin_words
+
+
+def language_repair_target(
+    text: str,
+    detected_language: str | None,
+    audio_seconds: float,
+) -> str | None:
+    """Choose a safe primary-language retry for a short mixed-script result.
+
+    Detection and script dominance must independently agree. A mismatch is
+    treated as intentional code-switching and left untouched.
+    """
+    if audio_seconds > LANGUAGE_REPAIR_MAX_SEC:
+        return None
+
+    language = normalize_detected_language(detected_language)
+    if language not in {"Chinese", "English"}:
+        return None
+
+    han_characters, latin_words = transcript_script_units(text)
+    total_units = han_characters + latin_words
+    if (
+        han_characters == 0
+        or latin_words == 0
+        or total_units > LANGUAGE_REPAIR_MAX_UNITS
+        or han_characters == latin_words
+    ):
+        return None
+
+    dominant = "Chinese" if han_characters > latin_words else "English"
+    return language if language == dominant else None
+
+
+def is_better_language_repair(
+    original: str,
+    candidate: str,
+    target_language: str,
+) -> bool:
+    """Accept only a same-sized candidate with less conflicting script."""
+    if not candidate.strip() or candidate.strip() == original.strip():
+        return False
+
+    original_han, original_latin = transcript_script_units(original)
+    candidate_han, candidate_latin = transcript_script_units(candidate)
+    original_units = original_han + original_latin
+    candidate_units = candidate_han + candidate_latin
+    if original_units == 0:
+        return False
+
+    minimum_units = max(1, (original_units + 1) // 2)
+    maximum_units = original_units * 2 + 2
+    if not minimum_units <= candidate_units <= maximum_units:
+        return False
+
+    if target_language == "English":
+        return candidate_latin > 0 and candidate_han < original_han
+    if target_language == "Chinese":
+        return candidate_han > 0 and candidate_latin < original_latin
+    return False
 
 
 def is_confident_silence(audio: np.ndarray) -> bool:
@@ -178,7 +284,7 @@ class Server:
         model_id: str,
         bits: int,
         context: str,
-        short_utterance_language: str = "English",
+        short_utterance_language: str = "",
         engine: str = "qwen3",
     ):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -203,6 +309,7 @@ class Server:
         self._last_preview_start = 0
         self._last_preview_context_revision = -1
         self._last_preview_language: str | None = None
+        self._last_preview_detected_language: str | None = None
         self._last_preview_stable = False
         self._thread: threading.Thread | None = None
         self._preview_stop = threading.Event()
@@ -213,37 +320,93 @@ class Server:
             return self._utterance_short_language
         return None
 
+    def _decode_result(
+        self,
+        audio: np.ndarray,
+        context: str,
+        language: str | None = None,
+    ) -> DecodeResult:
+        kw = {"context": context} if context else {}
+        if language:
+            kw["language"] = language
+        raw_result = self.session.transcribe(audio, **kw)
+        detected_language = normalize_detected_language(
+            getattr(raw_result, "language", None)
+        )
+        return DecodeResult(
+            text=(raw_result.text or "").strip(),
+            language=detected_language or normalize_detected_language(language),
+        )
+
     def _decode(
         self,
         audio: np.ndarray,
         context: str,
         language: str | None = None,
     ) -> str:
-        kw = {"context": context} if context else {}
-        if language:
-            kw["language"] = language
-        return (self.session.transcribe(audio, **kw).text or "").strip()
+        return self._decode_result(audio, context, language).text
+
+    def _decode_preview_result(
+        self,
+        audio: np.ndarray,
+        context: str,
+    ) -> DecodeResult:
+        """Decode a live preview and retain the model's audio language."""
+        return self._decode_result(audio, context)
 
     def _decode_preview(self, audio: np.ndarray, context: str) -> str:
         """Decode live text without treating a sentence start as one word."""
-        return self._decode(audio, context)
+        return self._decode_preview_result(audio, context).text
+
+    def _decode_final_result(
+        self,
+        audio: np.ndarray,
+        context: str,
+    ) -> DecodeResult:
+        """Apply explicit short-utterance guidance after clip length is known."""
+        return self._decode_result(audio, context, self._language_for_audio(audio))
 
     def _decode_final(self, audio: np.ndarray, context: str) -> str:
         """Apply short-utterance guidance only after clip length is known."""
-        return self._decode(audio, context, self._language_for_audio(audio))
+        return self._decode_final_result(audio, context).text
+
+    def _repair_short_language(
+        self,
+        audio: np.ndarray,
+        context: str,
+        result: DecodeResult,
+    ) -> tuple[DecodeResult, str | None]:
+        """Retry a suspicious short mixed result in its detected language."""
+        target = language_repair_target(
+            result.text,
+            result.language,
+            len(audio) / SAMPLE_RATE,
+        )
+        if target is None:
+            return result, None
+
+        candidate = self._decode_result(audio, context, target)
+        if is_better_language_repair(result.text, candidate.text, target):
+            return candidate, target
+        return result, None
 
     def _reusable_preview(
         self,
         audio: np.ndarray,
         context_revision: int,
-    ) -> tuple[str, str, int] | None:
-        """Return (text, mode, unseen samples) when preview reuse is safe."""
+    ) -> tuple[str, str, int, str | None] | None:
+        """Return text, mode, unseen samples, and detected language."""
         with self.lock:
             text = self._last_preview_text
             decoded_len = self._last_preview_len
             decoded_start = self._last_preview_start
             decoded_revision = self._last_preview_context_revision
             decoded_language = self._last_preview_language
+            detected_language = getattr(
+                self,
+                "_last_preview_detected_language",
+                None,
+            )
             stable = self._last_preview_stable
 
         if text is None or decoded_revision != context_revision:
@@ -264,12 +427,12 @@ class Server:
         if unseen == 0:
             # Same samples + same context produces the same deterministic final
             # result, so a second pass would be pure duplicate work.
-            return text, "reuse-exact", 0
+            return text, "reuse-exact", 0, detected_language
 
         max_tail = int(MAX_SILENT_REUSE_TAIL * SAMPLE_RATE)
         tail = audio[decoded_len:]
         if unseen <= max_tail and stable and is_confident_silence(tail):
-            return text, "reuse-silent-tail", unseen
+            return text, "reuse-silent-tail", unseen, detected_language
         return None
 
     @staticmethod
@@ -281,6 +444,7 @@ class Server:
         mode: str,
         wait_ms: int,
         unseen_samples: int = 0,
+        language: str | None = None,
     ) -> None:
         emit({
             "type": "final",
@@ -291,6 +455,7 @@ class Server:
             "wait_ms": wait_ms,
             "mode": mode,
             "unseen_ms": int(unseen_samples / SAMPLE_RATE * 1000),
+            "language": language or "unknown",
         })
 
     def _join_preview_thread(self, timeout: float | None = 5.0) -> bool:
@@ -323,7 +488,8 @@ class Server:
             audio, preview_start = preview_audio(full_audio)
             try:
                 decode_started = time.perf_counter()
-                text = self._decode_preview(audio, context)
+                result = self._decode_preview_result(audio, context)
+                text = result.text
                 decode_seconds = time.perf_counter() - decode_started
                 stable = text == self._prev
                 agreed = commonprefix(text, self._prev)
@@ -346,6 +512,7 @@ class Server:
                     # recognition. Only a completed short clip receives the
                     # user's one-word language guidance.
                     self._last_preview_language = None
+                    self._last_preview_detected_language = result.language
                     self._last_preview_stable = stable
                 if self.active:
                     emit({
@@ -386,6 +553,7 @@ class Server:
             self._last_preview_start = 0
             self._last_preview_context_revision = -1
             self._last_preview_language = None
+            self._last_preview_detected_language = None
             self._last_preview_stable = False
         self.committed = ""
         self._prev = ""
@@ -447,10 +615,25 @@ class Server:
         # before waiting for a newer, now-unneeded preview that may be in flight.
         reusable = self._reusable_preview(audio, context_revision)
         if reusable is not None:
-            text, mode, unseen = reusable
-            self._emit_final(text, secs, 0, stop_started, mode, 0, unseen)
-            self._join_preview_thread()
-            return
+            text, mode, unseen, detected_language = reusable
+            repair_target = language_repair_target(
+                text,
+                detected_language,
+                secs,
+            )
+            if repair_target is None:
+                self._emit_final(
+                    text,
+                    secs,
+                    0,
+                    stop_started,
+                    mode,
+                    0,
+                    unseen,
+                    detected_language,
+                )
+                self._join_preview_thread()
+                return
 
         wait_started = time.perf_counter()
         if not self._join_preview_thread():
@@ -462,24 +645,70 @@ class Server:
         # while stop() was waiting. Reuse it before scheduling another pass.
         reusable = self._reusable_preview(audio, context_revision)
         if reusable is not None:
-            text, mode, unseen = reusable
-            self._emit_final(text, secs, 0, stop_started, mode, wait_ms, unseen)
+            text, mode, unseen, detected_language = reusable
+            result = DecodeResult(text, detected_language)
+            repair_target = language_repair_target(text, detected_language, secs)
+            inference_started = time.perf_counter()
+            try:
+                repaired, accepted_target = self._repair_short_language(
+                    audio,
+                    context,
+                    result,
+                )
+            except Exception as e:
+                emit({"type": "error", "message": f"final: {e}"})
+                return
+            inference_ms = int((time.perf_counter() - inference_started) * 1000)
+            final_mode = mode
+            if accepted_target is not None:
+                final_mode += f"-language-repair-{accepted_target.casefold()}"
+            elif repair_target is not None:
+                final_mode += "-language-repair-rejected"
+            self._emit_final(
+                repaired.text,
+                secs,
+                inference_ms,
+                stop_started,
+                final_mode,
+                wait_ms,
+                unseen,
+                repaired.language,
+            )
             return
 
         inference_started = time.perf_counter()
         try:
-            text = self._decode_final(audio, context)
+            result = self._decode_final_result(audio, context)
+            repair_target = None
+            accepted_target = None
+            if self._language_for_audio(audio) is None:
+                repair_target = language_repair_target(
+                    result.text,
+                    result.language,
+                    secs,
+                )
+                result, accepted_target = self._repair_short_language(
+                    audio,
+                    context,
+                    result,
+                )
         except Exception as e:
             emit({"type": "error", "message": f"final: {e}"})
             return
         inference_ms = int((time.perf_counter() - inference_started) * 1000)
+        mode = "fresh-final"
+        if accepted_target is not None:
+            mode += f"-language-repair-{accepted_target.casefold()}"
+        elif repair_target is not None:
+            mode += "-language-repair-rejected"
         self._emit_final(
-            text,
+            result.text,
             secs,
             inference_ms,
             stop_started,
-            "fresh-final",
+            mode,
             wait_ms,
+            language=result.language,
         )
 
 
@@ -490,7 +719,7 @@ def main() -> int:
     context = os.environ.get("WHISPR_CONTEXT", "")
     short_utterance_language = os.environ.get(
         "WHISPR_SHORT_UTTERANCE_LANGUAGE",
-        "English",
+        "",
     )
 
     try:

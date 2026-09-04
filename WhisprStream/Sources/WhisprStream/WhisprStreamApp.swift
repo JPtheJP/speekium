@@ -490,8 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isResolvingPrecedingText = false
         transcriptDeliveryGate.reset()
         precedingTextAtDictationStart = settings.autoInsert
-            && (settings.contextAwareCapitalization
-                || settings.shortUtteranceLanguage == .smartEnglishChinese)
+            && settings.contextAwareCapitalization
             ? TextInserter.textBeforeCursor()
             : nil
         resolvedPrecedingText = precedingTextAtDictationStart
@@ -503,8 +502,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         settings.playStart()
         let shortLanguage = ShortUtteranceLanguageResolver.modelLanguage(
-            for: settings.shortUtteranceLanguage,
-            precedingText: precedingTextAtDictationStart
+            for: settings.shortUtteranceLanguage
         )
         asr.beginUtterance(shortUtteranceLanguage: shortLanguage)
         do {

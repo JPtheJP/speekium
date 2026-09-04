@@ -152,6 +152,9 @@ class ShortUtteranceLanguageTests(unittest.TestCase):
         self.assertIsNone(
             asr_server.normalize_short_utterance_language("automatic")
         )
+        self.assertIsNone(
+            asr_server.normalize_short_utterance_language("Automatic multilingual")
+        )
 
     def test_all_official_languages_are_available(self):
         self.assertEqual(len(asr_server.SUPPORTED_SHORT_UTTERANCE_LANGUAGES), 30)
@@ -208,6 +211,146 @@ class ShortUtteranceLanguageTests(unittest.TestCase):
         self.assertEqual(server.session.calls, [{"language": "Chinese"}])
 
 
+class ShortPhraseLanguageRepairTests(unittest.TestCase):
+    def test_partial_english_translation_selects_english_retry(self):
+        self.assertEqual(
+            asr_server.language_repair_target(
+                "让我 take a look",
+                "English",
+                2.7,
+            ),
+            "English",
+        )
+
+    def test_partial_chinese_translation_selects_chinese_retry(self):
+        self.assertEqual(
+            asr_server.language_repair_target(
+                "Let me 看一下",
+                "Chinese",
+                2.7,
+            ),
+            "Chinese",
+        )
+
+    def test_primary_language_disagreement_preserves_code_switch(self):
+        self.assertIsNone(
+            asr_server.language_repair_target(
+                "让我 take a look",
+                "Chinese",
+                2.7,
+            )
+        )
+
+    def test_long_or_single_script_transcripts_are_not_repaired(self):
+        self.assertIsNone(
+            asr_server.language_repair_target(
+                "让我 take a look",
+                "English",
+                asr_server.LANGUAGE_REPAIR_MAX_SEC + 0.01,
+            )
+        )
+        self.assertIsNone(
+            asr_server.language_repair_target(
+                "let me take a look",
+                "English",
+                2.7,
+            )
+        )
+
+    def test_repair_must_remove_conflicting_script_without_collapsing(self):
+        self.assertTrue(
+            asr_server.is_better_language_repair(
+                "让我 take a look",
+                "Let me take a look",
+                "English",
+            )
+        )
+        self.assertFalse(
+            asr_server.is_better_language_repair(
+                "让我 take a look",
+                "look",
+                "English",
+            )
+        )
+
+    def test_server_retries_with_detected_dominant_language(self):
+        class FakeSession:
+            def __init__(self):
+                self.calls = []
+
+            def transcribe(self, _audio, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs.get("language") == "English":
+                    return SimpleNamespace(
+                        text="Let me take a look",
+                        language="English",
+                    )
+                return SimpleNamespace(
+                    text="让我 take a look",
+                    language="English",
+                )
+
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = FakeSession()
+        audio = np.zeros(int(2.7 * asr_server.SAMPLE_RATE), dtype=np.float32)
+        original = server._decode_result(audio, "")
+
+        repaired, target = server._repair_short_language(audio, "", original)
+
+        self.assertEqual(target, "English")
+        self.assertEqual(repaired.text, "Let me take a look")
+        self.assertEqual(
+            server.session.calls,
+            [{}, {"language": "English"}],
+        )
+
+    def test_stop_repairs_reusable_preview_and_reports_language(self):
+        class FakeSession:
+            def transcribe(self, _audio, **kwargs):
+                self.last_call = kwargs
+                return SimpleNamespace(
+                    text="Let me take a look",
+                    language="English",
+                )
+
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = FakeSession()
+        server.lock = threading.Lock()
+        samples = np.arange(
+            int(2.7 * asr_server.SAMPLE_RATE),
+            dtype=np.float32,
+        )
+        server.buf = 0.04 * np.sin(
+            2 * np.pi * 180 * samples / asr_server.SAMPLE_RATE
+        )
+        server.context = ""
+        server._context_revision = 0
+        server._thread = None
+        server._preview_stop = threading.Event()
+        server.active = True
+        server.short_utterance_language = None
+        server._utterance_short_language = None
+        server._last_preview_text = "让我 take a look"
+        server._last_preview_len = len(server.buf)
+        server._last_preview_start = 0
+        server._last_preview_context_revision = 0
+        server._last_preview_language = None
+        server._last_preview_detected_language = "English"
+        server._last_preview_stable = True
+
+        with patch.object(asr_server, "emit") as emitted:
+            server.stop()
+
+        final = emitted.call_args.args[0]
+        self.assertEqual(final["text"], "Let me take a look")
+        self.assertEqual(
+            final["mode"],
+            "reuse-exact-language-repair-english",
+        )
+        self.assertEqual(final["language"], "English")
+        self.assertEqual(server.session.last_call, {"language": "English"})
+
+
 class PreviewReuseTests(unittest.TestCase):
     def make_server(self, text="hello", decoded_len=3200, revision=2, stable=True):
         server = asr_server.Server.__new__(asr_server.Server)
@@ -225,14 +368,17 @@ class PreviewReuseTests(unittest.TestCase):
     def test_exact_buffer_is_reused(self):
         server = self.make_server()
         audio = np.zeros(3200, dtype=np.float32)
-        self.assertEqual(server._reusable_preview(audio, 2), ("hello", "reuse-exact", 0))
+        self.assertEqual(
+            server._reusable_preview(audio, 2),
+            ("hello", "reuse-exact", 0, None),
+        )
 
     def test_stable_preview_with_silent_tail_is_reused(self):
         server = self.make_server()
         audio = np.zeros(4000, dtype=np.float32)
         self.assertEqual(
             server._reusable_preview(audio, 2),
-            ("hello", "reuse-silent-tail", 800),
+            ("hello", "reuse-silent-tail", 800, None),
         )
 
     def test_stable_preview_remains_reusable_across_adaptive_cooldown(self):
@@ -241,7 +387,7 @@ class PreviewReuseTests(unittest.TestCase):
         audio = np.zeros(3200 + tail, dtype=np.float32)
         self.assertEqual(
             server._reusable_preview(audio, 2),
-            ("hello", "reuse-silent-tail", tail),
+            ("hello", "reuse-silent-tail", tail, None),
         )
 
     def test_silent_tail_beyond_adaptive_headroom_falls_back(self):
@@ -280,7 +426,7 @@ class PreviewReuseTests(unittest.TestCase):
 
         self.assertEqual(
             server._reusable_preview(audio, 2),
-            ("hello", "reuse-exact", 0),
+            ("hello", "reuse-exact", 0, None),
         )
 
     def test_rolling_window_preview_is_never_reused_as_full_final(self):

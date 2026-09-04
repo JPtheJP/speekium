@@ -76,10 +76,11 @@ enum ActivationMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// Language guidance for clips too short to provide reliable language context.
-/// Longer utterances always keep automatic multilingual recognition.
+/// Optional language guidance for clips too short to provide reliable language
+/// context. Automatic mode preserves multilingual recognition at every length;
+/// fixed choices remain available for isolated words that need a tie-breaker.
 enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
-    case smartEnglishChinese
+    case automaticMultilingual
     case chinese, english, cantonese, arabic, german, french, spanish
     case portuguese, indonesian, italian, korean, russian, thai, vietnamese
     case japanese, turkish, hindi, malay, dutch, swedish, danish, finnish
@@ -91,7 +92,7 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
     /// canonical forced-language names.
     var modelName: String {
         switch self {
-        case .smartEnglishChinese: return "Smart English + Chinese"
+        case .automaticMultilingual: return "Automatic multilingual"
         case .chinese: return "Chinese"
         case .english: return "English"
         case .cantonese: return "Cantonese"
@@ -125,10 +126,25 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
         }
     }
 
-    /// A fixed Qwen language name, or nil when the app should select a hint
-    /// from the active writing context for this individual utterance.
+    /// A fixed Qwen language name, or nil when the model should infer the
+    /// spoken language directly from the audio.
     var fixedModelLanguage: String? {
-        self == .smartEnglishChinese ? nil : modelName
+        self == .automaticMultilingual ? nil : modelName
+    }
+
+    /// Decode both the current stored value and names used by earlier builds.
+    /// The old smart mode guessed from cursor/keyboard context; migrate it to
+    /// automatic audio detection so writing context cannot force-translate a
+    /// language switch.
+    static func persistedValue(_ rawValue: String?) -> Self {
+        switch rawValue {
+        case "smartEnglishChinese", "automatic":
+            return .automaticMultilingual
+        case let rawValue?:
+            return Self(rawValue: rawValue) ?? .automaticMultilingual
+        case nil:
+            return .automaticMultilingual
+        }
     }
 }
 
@@ -475,9 +491,9 @@ final class Settings: ObservableObject {
         contextAwareCapitalization = defaults.object(
             forKey: Keys.contextAwareCapitalization
         ) as? Bool ?? false
-        shortUtteranceLanguage = ShortUtteranceLanguage(
-            rawValue: defaults.string(forKey: Keys.shortUtteranceLanguage) ?? ""
-        ) ?? .smartEnglishChinese
+        shortUtteranceLanguage = ShortUtteranceLanguage.persistedValue(
+            defaults.string(forKey: Keys.shortUtteranceLanguage)
+        )
         playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? true
         // Migration: before pairs, the choice lived in `insertSound` as a bare
         // alert-sound name. Carry it over so an existing setting is preserved

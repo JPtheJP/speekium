@@ -51,7 +51,8 @@ final class ASRService {
             "WHISPR_ENGINE": engine.rawValue,
             "WHISPR_BITS": String(bits),
             "WHISPR_CONTEXT": context,
-            "WHISPR_SHORT_UTTERANCE_LANGUAGE": shortUtteranceLanguage.modelName,
+            "WHISPR_SHORT_UTTERANCE_LANGUAGE":
+                shortUtteranceLanguage.fixedModelLanguage ?? "",
         ])
     }
 
@@ -115,10 +116,11 @@ final class ASRService {
                 let waitMS = obj["wait_ms"] as? Int ?? 0
                 let mode = obj["mode"] as? String ?? "legacy"
                 let unseenMS = obj["unseen_ms"] as? Int ?? 0
+                let language = obj["language"] as? String ?? "unknown"
                 Log.write(
                     "asr final: audio=\(String(format: "%.2f", seconds))s "
                     + "visible=\(totalMS)ms wait=\(waitMS)ms inference=\(inferenceMS)ms "
-                    + "mode=\(mode) unseen=\(unseenMS)ms"
+                    + "mode=\(mode) unseen=\(unseenMS)ms language=\(language)"
                 )
                 event = .final(
                     text: obj["text"] as? String ?? "",

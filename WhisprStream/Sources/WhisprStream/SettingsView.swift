@@ -247,7 +247,7 @@ private struct GeneralTab: View {
             } header: {
                 Text("One-word dictation")
             } footer: {
-                Text("Smart English + Chinese follows nearby text and your keyboard language. Fixed choices remain available for clips up to two seconds. Live previews always detect language automatically.")
+                Text("Automatic multilingual preserves the language you speak, including short Chinese/English switches. Choose a fixed language only when isolated words are repeatedly misdetected; fixed choices apply to clips up to two seconds.")
                     .foregroundStyle(.secondary)
                     .font(.callout)
             }

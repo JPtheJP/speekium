@@ -43,61 +43,34 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         XCTAssertTrue(Settings(defaults: makeDefaults()).playSound)
     }
 
-    func testOneWordDictationOffersEveryQwenLanguageWithoutAutomatic() {
+    func testOneWordDictationOffersAutomaticAndEveryQwenLanguage() {
         let fixedLanguages = ShortUtteranceLanguage.allCases.compactMap(\.fixedModelLanguage)
 
         XCTAssertEqual(ShortUtteranceLanguage.allCases.count, 31)
         XCTAssertEqual(Set(fixedLanguages).count, 30)
-        XCTAssertFalse(ShortUtteranceLanguage.allCases.map(\.modelName).contains("Automatic"))
+        XCTAssertEqual(
+            ShortUtteranceLanguage.automaticMultilingual.modelName,
+            "Automatic multilingual"
+        )
     }
 
-    func testOneWordDictationDefaultsToSmartEnglishAndChinese() {
+    func testOneWordDictationDefaultsToAutomaticMultilingual() {
         XCTAssertEqual(
             Settings(defaults: makeDefaults()).shortUtteranceLanguage,
-            .smartEnglishChinese
+            .automaticMultilingual
         )
     }
 
-    func testSmartOneWordLanguageUsesNearestCursorScript() {
-        XCTAssertEqual(
-            ShortUtteranceLanguageResolver.modelLanguage(
-                for: .smartEnglishChinese,
-                precedingText: "Please enter 你好：",
-                inputSourceLanguages: ["en"]
-            ),
-            "Chinese"
-        )
-        XCTAssertEqual(
-            ShortUtteranceLanguageResolver.modelLanguage(
-                for: .smartEnglishChinese,
-                precedingText: "这是 a test: ",
-                inputSourceLanguages: ["zh-Hans"]
-            ),
-            "English"
-        )
+    func testAutomaticShortDictationNeverForcesALanguage() {
+        XCTAssertNil(ShortUtteranceLanguageResolver.modelLanguage(
+            for: .automaticMultilingual
+        ))
     }
 
-    func testSmartOneWordLanguageFallsBackToKeyboardThenAutomatic() {
+    func testFixedShortDictationLanguageRemainsDeterministic() {
         XCTAssertEqual(
             ShortUtteranceLanguageResolver.modelLanguage(
-                for: .smartEnglishChinese,
-                precedingText: nil,
-                inputSourceLanguages: ["zh-Hans"]
-            ),
-            "Chinese"
-        )
-        XCTAssertNil(
-            ShortUtteranceLanguageResolver.modelLanguage(
-                for: .smartEnglishChinese,
-                precedingText: nil,
-                inputSourceLanguages: ["ja"]
-            )
-        )
-        XCTAssertEqual(
-            ShortUtteranceLanguageResolver.modelLanguage(
-                for: .french,
-                precedingText: "中文",
-                inputSourceLanguages: ["zh-Hans"]
+                for: .french
             ),
             "French"
         )
@@ -181,11 +154,24 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         XCTAssertEqual(defaults.object(forKey: "needsFirstDictationCoach") as? Bool, false)
     }
 
-    func testLegacyAutomaticShortLanguageMigratesToSmartBilingual() {
+    func testLegacyAutomaticShortLanguageMigratesToAutomaticMultilingual() {
         let defaults = makeDefaults()
         defaults.set("automatic", forKey: "shortUtteranceLanguage")
 
-        XCTAssertEqual(Settings(defaults: defaults).shortUtteranceLanguage, .smartEnglishChinese)
+        XCTAssertEqual(
+            Settings(defaults: defaults).shortUtteranceLanguage,
+            .automaticMultilingual
+        )
+    }
+
+    func testLegacySmartBilingualMigratesToAutomaticMultilingual() {
+        let defaults = makeDefaults()
+        defaults.set("smartEnglishChinese", forKey: "shortUtteranceLanguage")
+
+        XCTAssertEqual(
+            Settings(defaults: defaults).shortUtteranceLanguage,
+            .automaticMultilingual
+        )
     }
 
     func testContextDeduplicatesIdenticalLiteralLinesAndNeverIncludesReplacement() throws {

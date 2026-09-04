@@ -18,7 +18,7 @@ def test_whisper_adapter_routes_model_prompt_and_language(monkeypatch):
 
     def transcribe(audio, **options):
         calls.append((audio, options))
-        return {"text": " hello "}
+        return {"text": " hello ", "language": "en"}
 
     monkeypatch.setitem(sys.modules, "mlx_whisper", SimpleNamespace(transcribe=transcribe))
     session = asr_engine.WhisperSession("mlx-community/whisper-small-mlx")
@@ -27,6 +27,7 @@ def test_whisper_adapter_routes_model_prompt_and_language(monkeypatch):
     result = session.transcribe(audio, context="WhisprStream", language="English")
 
     assert result.text == " hello "
+    assert result.language == "en"
     assert calls == [(audio, {
         "path_or_hf_repo": "mlx-community/whisper-small-mlx",
         "verbose": None,

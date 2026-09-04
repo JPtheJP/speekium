@@ -19,6 +19,7 @@ SUPPORTED_ENGINES = ("qwen3", "whisper")
 @dataclass(frozen=True)
 class TranscriptionResult:
     text: str
+    language: str | None = None
 
 
 # Whisper's tokenizer uses ISO-like language codes. The Settings UI keeps the
@@ -85,7 +86,11 @@ class WhisperSession:
             if code:
                 options["language"] = code
         result = self._mlx_whisper.transcribe(audio, **options)
-        return TranscriptionResult(text=str(result.get("text") or ""))
+        language = result.get("language")
+        return TranscriptionResult(
+            text=str(result.get("text") or ""),
+            language=str(language) if language else None,
+        )
 
 
 def _qwen_session(model_id: str, bits: int):
