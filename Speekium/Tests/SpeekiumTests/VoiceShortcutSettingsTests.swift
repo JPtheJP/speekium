@@ -39,18 +39,20 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         XCTAssertTrue(Settings(defaults: makeDefaults()).contextAwareCapitalization)
     }
 
-    func testOneWordDictationOffersEveryQwenLanguageWithoutAutomatic() {
+    func testOneWordDictationOffersEveryQwenLanguagePlusTwoSmartModes() {
         let fixedLanguages = ShortUtteranceLanguage.allCases.compactMap(\.fixedModelLanguage)
+        let smartModes = ShortUtteranceLanguage.allCases.filter { $0.fixedModelLanguage == nil }
 
-        XCTAssertEqual(ShortUtteranceLanguage.allCases.count, 31)
+        XCTAssertEqual(ShortUtteranceLanguage.allCases.count, 32)
         XCTAssertEqual(Set(fixedLanguages).count, 30)
-        XCTAssertFalse(ShortUtteranceLanguage.allCases.map(\.modelName).contains("Automatic"))
+        XCTAssertEqual(smartModes, [.smartAutomatic, .smartEnglishChinese])
     }
 
-    func testOneWordDictationDefaultsToSmartEnglishAndChinese() {
+    func testOneWordDictationDefaultsToSmartAutomatic() {
+        // The safe default for multilingual speakers: never forces a wrong language.
         XCTAssertEqual(
             Settings(defaults: makeDefaults()).shortUtteranceLanguage,
-            .smartEnglishChinese
+            .smartAutomatic
         )
     }
 
@@ -132,11 +134,12 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         ))
     }
 
-    func testLegacyAutomaticShortLanguageMigratesToSmartBilingual() {
+    func testLegacyAutomaticShortLanguageMigratesToSmartAutomatic() {
+        // A pre-smart "automatic" preference now has a true automatic mode to land on.
         let defaults = makeDefaults()
         defaults.set("automatic", forKey: "shortUtteranceLanguage")
 
-        XCTAssertEqual(Settings(defaults: defaults).shortUtteranceLanguage, .smartEnglishChinese)
+        XCTAssertEqual(Settings(defaults: defaults).shortUtteranceLanguage, .smartAutomatic)
     }
 
     func testContextDeduplicatesIdenticalLiteralLinesAndNeverIncludesReplacement() throws {

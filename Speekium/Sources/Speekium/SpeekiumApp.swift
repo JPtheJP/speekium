@@ -323,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dismissWork?.cancel()
         precedingTextAtDictationStart = settings.autoInsert
             && (settings.contextAwareCapitalization
-                || settings.shortUtteranceLanguage == .smartEnglishChinese)
+                || settings.shortUtteranceLanguage.usesCursorContext)
             ? TextInserter.textBeforeCursor()
             : nil
         state.reset()

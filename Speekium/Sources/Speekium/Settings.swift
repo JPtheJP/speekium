@@ -79,6 +79,7 @@ enum ActivationMode: String, CaseIterable, Identifiable {
 /// Language guidance for clips too short to provide reliable language context.
 /// Longer utterances always keep automatic multilingual recognition.
 enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
+    case smartAutomatic
     case smartEnglishChinese
     case chinese, english, cantonese, arabic, german, french, spanish
     case portuguese, indonesian, italian, korean, russian, thai, vietnamese
@@ -91,6 +92,7 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
     /// canonical forced-language names.
     var modelName: String {
         switch self {
+        case .smartAutomatic: return "Smart (automatic)"
         case .smartEnglishChinese: return "Smart English + Chinese"
         case .chinese: return "Chinese"
         case .english: return "English"
@@ -128,7 +130,16 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
     /// A fixed Qwen language name, or nil when the app should select a hint
     /// from the active writing context for this individual utterance.
     var fixedModelLanguage: String? {
-        self == .smartEnglishChinese ? nil : modelName
+        usesCursorContext ? nil : modelName
+    }
+
+    /// Smart modes read the text near the cursor to pick a per-utterance hint,
+    /// so the app must capture that context when dictation starts.
+    var usesCursorContext: Bool {
+        switch self {
+        case .smartAutomatic, .smartEnglishChinese: return true
+        default: return false
+        }
     }
 }
 
@@ -399,7 +410,7 @@ final class Settings: ObservableObject {
         ) as? Bool ?? true
         shortUtteranceLanguage = ShortUtteranceLanguage(
             rawValue: defaults.string(forKey: Keys.shortUtteranceLanguage) ?? ""
-        ) ?? .smartEnglishChinese
+        ) ?? .smartAutomatic
         pauseMediaWhileDictating = defaults.object(forKey: Keys.pauseMediaWhileDictating) as? Bool ?? true
         playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? false
         // Migration: before pairs, the choice lived in `insertSound` as a bare

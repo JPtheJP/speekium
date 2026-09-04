@@ -259,7 +259,7 @@ private struct GeneralTab: View {
             } header: {
                 Text("One-word dictation")
             } footer: {
-                Text("Smart English + Chinese follows nearby text and your keyboard language. Fixed choices remain available for clips up to two seconds. Live previews always detect language automatically.")
+                Text("Smart (automatic) matches the language of the text near your cursor and otherwise lets the model detect it — it never forces the wrong language. Smart English + Chinese follows nearby text and your keyboard language. Fixed choices apply only to clips up to two seconds; longer speech and live previews always detect language automatically.")
                     .foregroundStyle(.secondary)
                     .font(.callout)
             }

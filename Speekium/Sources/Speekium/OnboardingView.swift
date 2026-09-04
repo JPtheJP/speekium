@@ -421,7 +421,7 @@ struct OnboardingView: View {
                         .frame(width: 170)
                     }
 
-                    Text("Mainly used for a single isolated word. Smart mode follows nearby text and your keyboard language; choose a fixed language when you need strict control.")
+                    Text("Mainly used for a single isolated word. Smart (automatic) matches the text near your cursor and otherwise lets the model detect the language; choose a fixed language when you need strict control.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
