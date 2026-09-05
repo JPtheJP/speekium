@@ -1,4 +1,4 @@
-# WhisprStream installation and open-source release implementation plan
+# Speekium installation and open-source release implementation plan
 
 ## Purpose
 
@@ -16,7 +16,7 @@ This plan intentionally keeps the speech engine and speech models as separate
 downloads. They have different purposes and lifecycles:
 
 - The **speech engine** is a private, relocatable CPython 3.12 environment with
-  MLX and WhisprStream's pinned Python dependencies.
+  MLX and Speekium's pinned Python dependencies.
 - A **speech model** contains replaceable Qwen3-ASR weights. Users select and
   download one model after the engine is ready.
 
@@ -26,7 +26,7 @@ downloads. They have different purposes and lifecycles:
 2. Normal users never install or configure Python.
 3. Keep Python 3.12 as an internal, pinned runtime detail.
 4. Install the engine under
-   `~/Library/Application Support/WhisprStream/Runtime`.
+   `~/Library/Application Support/Speekium/Runtime`.
 5. Keep models in the Hugging Face cache, honoring `HF_HUB_CACHE` and
    `HF_HOME` when intentionally supplied.
 6. Keep engine installation and model installation as separate onboarding
@@ -48,7 +48,7 @@ downloads. They have different purposes and lifecycles:
 
 The existing code already provides most of the application-level workflow:
 
-- `WhisprStreamApp.swift` checks whether the runtime and selected model exist,
+- `SpeekiumApp.swift` checks whether the runtime and selected model exist,
   then opens onboarding when either is missing.
 - `OnboardingView.swift` contains welcome, engine, model, permissions,
   preferences, output, optional Voice Shortcut, and ready steps.
@@ -64,7 +64,7 @@ The existing code already provides most of the application-level workflow:
 - `build-runtime.sh`, `build.sh`, and `RELEASING.md` describe a separate runtime
   and app release.
 
-The current checked-out `WhisprStream.app` is not distributable. It uses the
+The current checked-out `Speekium.app` is not distributable. It uses the
 development bundle identifier, has no release runtime URL, embeds an absolute
 path to the maintainer's `.venv`, and is not signed by a portable release
 identity. Some update-related source changes are also currently uncommitted.
@@ -91,11 +91,11 @@ are required.
 
 ```text
 GitHub Release
-├── WhisprStream-macos-arm64.zip       user downloads this
-├── WhisprStream-runtime-<version>-arm64.zip
+├── Speekium-macos-arm64.zip       user downloads this
+├── Speekium-runtime-<version>-arm64.zip
 └── SHA256SUMS
 
-WhisprStream.app
+Speekium.app
 ├── native Swift executable
 ├── asr_server.py
 ├── asr_engine.py
@@ -107,7 +107,7 @@ WhisprStream.app
     ├── expected archive bytes
     └── expected installed bytes
 
-~/Library/Application Support/WhisprStream/Runtime
+~/Library/Application Support/Speekium/Runtime
 ├── manifest.json
 ├── bin/python3.12
 ├── Python standard library
@@ -157,17 +157,17 @@ Create one shared environment builder, for example
 4. Pass `-s` and `-u` to Python before the script path. `-s` prevents user site
    packages from being imported and `-u` keeps the JSON protocol unbuffered.
 5. Preserve `HF_HOME`, `HF_HUB_CACHE`, HTTPS proxy variables, system certificate
-   variables, and WhisprStream's own `WHISPR_*` variables.
+   variables, and Speekium's own `SPEEKIUM_*` variables.
 6. Do not use Python's `-I` mode without adapting the resource import path;
    `asr_server.py` imports the sibling `asr_engine.py`, and `-I` removes the
    script directory from `sys.path`.
-7. Keep `WHISPR_PYTHON` as an explicit developer override. Public builds must
+7. Keep `SPEEKIUM_PYTHON` as an explicit developer override. Public builds must
    not contain a development Python path in `Info.plist`.
 
 Update:
 
-- `WhisprStream/Sources/WhisprStream/ASRService.swift`
-- `WhisprStream/Sources/WhisprStream/ModelDownloader.swift`
+- `Speekium/Sources/Speekium/ASRService.swift`
+- `Speekium/Sources/Speekium/ModelDownloader.swift`
 - Any new Python-based helper introduced by this plan
 
 ### Acceptance criteria
@@ -207,11 +207,11 @@ changes incompatibly.
 
 Add the following release values to `Info.plist` through `build.sh`:
 
-- `WhisprRuntimeVersion`
-- `WhisprRuntimeURL`
-- `WhisprRuntimeSHA256`
-- `WhisprRuntimeArchiveBytes`
-- `WhisprRuntimeInstalledBytes`
+- `SpeekiumRuntimeVersion`
+- `SpeekiumRuntimeURL`
+- `SpeekiumRuntimeSHA256`
+- `SpeekiumRuntimeArchiveBytes`
+- `SpeekiumRuntimeInstalledBytes`
 
 Release builds must fail if any value is missing, malformed, zero, points to a
 non-HTTPS URL, or still uses the development bundle identifier.
@@ -498,7 +498,7 @@ model revision, and runtime version.
 
 ### Stable release identity
 
-Create one self-signed code-signing certificate dedicated to WhisprStream and
+Create one self-signed code-signing certificate dedicated to Speekium and
 reuse it for every public release.
 
 - Keep its private key outside the repository and out of GitHub Release assets.
@@ -506,7 +506,7 @@ reuse it for every public release.
 - Add a `SIGNING_IDENTITY` input to the release scripts.
 - Make `RELEASE=1` fail rather than silently falling back to ad-hoc signing.
 - Use a permanent bundle identifier, such as the already documented
-  `com.leoleo.whisprstream`, and never change it after release.
+  `com.jpthejp.speekium`, and never change it after release.
 - Verify signatures before archiving.
 
 The documentation must be explicit: self-signing does not provide Apple trust,
@@ -517,9 +517,9 @@ developer warning.
 
 Use these names:
 
-- `WhisprStream-macos-arm64.zip` for the user-facing app asset. Keep this name
+- `Speekium-macos-arm64.zip` for the user-facing app asset. Keep this name
   stable so the website can use GitHub's `latest/download` URL.
-- `WhisprStream-runtime-<runtime-version>-arm64.zip` for the engine asset.
+- `Speekium-runtime-<runtime-version>-arm64.zip` for the engine asset.
 - `SHA256SUMS` for both files.
 
 Use `ditto -c -k --sequesterRsrc --keepParent` to preserve macOS metadata and the
@@ -544,11 +544,11 @@ Suggested first release order:
 
 Release notes and installation documentation must tell users:
 
-1. Download `WhisprStream-macos-arm64.zip` from the GitHub Release.
-2. Extract it and move WhisprStream to Applications.
+1. Download `Speekium-macos-arm64.zip` from the GitHub Release.
+2. Extract it and move Speekium to Applications.
 3. Attempt to open it normally.
 4. If macOS blocks it, open System Settings → Privacy & Security, find the
-   WhisprStream message under Security, click **Open Anyway**, authenticate, and
+   Speekium message under Security, click **Open Anyway**, authenticate, and
    confirm **Open**.
 
 On macOS versions where Control-click → Open is still offered, it may be noted
@@ -579,10 +579,10 @@ Accessibility to be re-granted, document that honestly in update notes.
 Replace placeholder `href="#"` values.
 
 - Main Download button:
-  `https://github.com/Leo6Leo/whispr-stream/releases/latest/download/WhisprStream-macos-arm64.zip`
+  `https://github.com/JPtheJP/speekium/releases/latest/download/Speekium-macos-arm64.zip`
 - Source buttons:
-  `https://github.com/Leo6Leo/whispr-stream`
-- Remove `brew install whisprstream` until a real Homebrew Cask exists.
+  `https://github.com/JPtheJP/speekium`
+- Remove `brew install speekium` until a real Homebrew Cask exists.
 
 Near the download button, state:
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Prepare an Apple Silicon Mac to build and run WhisprStream.
+# Prepare an Apple Silicon Mac to build and run Speekium.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -7,7 +7,7 @@ PROJECT_ROOT="$(pwd)"
 VENV="${VENV:-$PROJECT_ROOT/.venv}"
 
 if [ "$(uname -m)" != "arm64" ]; then
-    echo "error: WhisprStream requires an Apple Silicon Mac (arm64)" >&2
+    echo "error: Speekium requires an Apple Silicon Mac (arm64)" >&2
     exit 1
 fi
 
@@ -39,5 +39,5 @@ echo "▸ installing Apple Silicon ASR dependencies"
 "$VENV/bin/python" -m pip install --no-deps -r requirements-macos-arm64-nodeps.txt
 
 echo "✓ setup complete"
-echo "  next: ./WhisprStream/build.sh"
-echo "  then: open WhisprStream.app"
+echo "  next: ./Speekium/build.sh"
+echo "  then: open Speekium.app"

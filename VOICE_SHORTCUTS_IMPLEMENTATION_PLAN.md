@@ -7,7 +7,7 @@ Audience: Luna, or the next engineer implementing the feature.
 ## 1. Feature summary
 
 Voice Shortcuts let a user associate a spoken trigger with literal text. When a
-finished dictation consists of that trigger, WhisprStream inserts the saved text
+finished dictation consists of that trigger, Speekium inserts the saved text
 instead of the recognized trigger.
 
 Example:
@@ -151,7 +151,7 @@ Non-blocking warning:
   unusual word for best results."
 
 Do not maintain an English-only list of common words and do not reject short
-words. WhisprStream supports mixed Chinese and English, so a language-specific
+words. Speekium supports mixed Chinese and English, so a language-specific
 validator would give inconsistent behavior.
 
 ### 3.4 Suggested triggers
@@ -190,7 +190,7 @@ code fragments, and multiline templates. It is not a password manager.
 
 ### 4.1 New model
 
-Create `Sources/WhisprStream/VoiceShortcut.swift`:
+Create `Sources/Speekium/VoiceShortcut.swift`:
 
 ```swift
 struct VoiceShortcut: Codable, Identifiable, Equatable {
@@ -254,7 +254,7 @@ data to an Application Support file.
 ### 5.1 One shared normalizer
 
 Create the normalizer next to the model or in
-`Sources/WhisprStream/TranscriptExpander.swift`. Storage validation, duplicate
+`Sources/Speekium/TranscriptExpander.swift`. Storage validation, duplicate
 detection, UI warnings, and runtime matching must all call the same function.
 Do not duplicate normalization rules in the view.
 
@@ -289,7 +289,7 @@ that every language separates words with ASCII spaces.
 
 ### 5.2 Expander API
 
-Create `Sources/WhisprStream/TranscriptExpander.swift` with a pure API similar to:
+Create `Sources/Speekium/TranscriptExpander.swift` with a pure API similar to:
 
 ```swift
 struct TranscriptExpansionResult: Equatable {
@@ -428,7 +428,7 @@ Do not log:
 - Clipboard readback
 
 This prevents long templates or private snippets from being copied into
-`~/Library/Logs/WhisprStream.log`. Clipboard-based insertion still means other
+`~/Library/Logs/Speekium.log`. Clipboard-based insertion still means other
 macOS clipboard managers may observe the text, which is why credentials remain
 out of scope.
 
@@ -436,36 +436,36 @@ out of scope.
 
 ### Add
 
-- `WhisprStream/Sources/WhisprStream/VoiceShortcut.swift`
+- `Speekium/Sources/Speekium/VoiceShortcut.swift`
   - Model and shared trigger normalization/validation types
-- `WhisprStream/Sources/WhisprStream/TranscriptExpander.swift`
+- `Speekium/Sources/Speekium/TranscriptExpander.swift`
   - Pure matching and expansion logic
-- `WhisprStream/Sources/WhisprStream/VoiceShortcutsView.swift`
+- `Speekium/Sources/Speekium/VoiceShortcutsView.swift`
   - Settings tab, rows, empty state, and add/edit sheet
-- `WhisprStream/Tests/WhisprStreamTests/TranscriptExpanderTests.swift`
+- `Speekium/Tests/SpeekiumTests/TranscriptExpanderTests.swift`
   - Normalization and expansion unit tests
-- `WhisprStream/Tests/WhisprStreamTests/VoiceShortcutSettingsTests.swift`
+- `Speekium/Tests/SpeekiumTests/VoiceShortcutSettingsTests.swift`
   - Persistence/context tests if settings storage is made injectable
 
 ### Modify
 
-- `WhisprStream/Sources/WhisprStream/Settings.swift`
+- `Speekium/Sources/Speekium/Settings.swift`
   - Published shortcut collection, persistence, mutations, combined ASR context
-- `WhisprStream/Sources/WhisprStream/SettingsView.swift`
+- `Speekium/Sources/Speekium/SettingsView.swift`
   - Add Shortcuts tab and update window dimensions
-- `WhisprStream/Sources/WhisprStream/WhisprStreamApp.swift`
+- `Speekium/Sources/Speekium/SpeekiumApp.swift`
   - Use combined context and expand final transcript before delivery
-- `WhisprStream/Sources/WhisprStream/TextInserter.swift`
+- `Speekium/Sources/Speekium/TextInserter.swift`
   - Remove clipboard content from logs
-- `WhisprStream/Package.swift`
+- `Speekium/Package.swift`
   - Add the Swift test target
 - `HANDOFF.md`
   - Document the shipped feature and new files after implementation is verified
 
 ### No Python change expected
 
-- `WhisprStream/Resources/asr_server.py`
-- `WhisprStream/Resources/asr_engine.py`
+- `Speekium/Resources/asr_server.py`
+- `Speekium/Resources/asr_engine.py`
 
 The existing `context` command is sufficient.
 

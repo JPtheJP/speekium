@@ -1,4 +1,4 @@
-# Runtime used by WhisprStream's Python ASR sidecar. mlx-whisper itself is
+# Runtime used by Speekium's Python ASR sidecar. mlx-whisper itself is
 # installed from requirements-macos-arm64-nodeps.txt so its conversion-only
 # PyTorch dependency is not shipped in the transcription runtime.
 # These versions are the known-good Apple Silicon environment used to build

@@ -5,7 +5,7 @@ import pytest
 
 
 ROOT = Path(__file__).parents[1]
-SCRIPT = ROOT / "WhisprStream" / "runtime-content-sha256.py"
+SCRIPT = ROOT / "Speekium" / "runtime-content-sha256.py"
 SPEC = importlib.util.spec_from_file_location("runtime_content_sha256", SCRIPT)
 runtime_digest = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime_digest)

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 
 
-RESOURCES = Path(__file__).parents[1] / "WhisprStream" / "Resources"
+RESOURCES = Path(__file__).parents[1] / "Speekium" / "Resources"
 sys.path.insert(0, str(RESOURCES))
 
 import asr_server  # noqa: E402

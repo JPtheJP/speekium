@@ -1,21 +1,21 @@
-# Install WhisprStream
+# Install Speekium
 
-WhisprStream is a free, open-source menu-bar dictation app for Apple-silicon Macs. It requires macOS 14 or later and approximately 4 GB free for the app, private speech engine, and recommended Qwen3-ASR 0.6B model.
+Speekium is a free, open-source menu-bar dictation app for Apple-silicon Macs. It requires macOS 14 or later and approximately 4 GB free for the app, private speech engine, and recommended Qwen3-ASR 0.6B model.
 
 ## Download and open
 
-1. Open [GitHub Releases](https://github.com/Leo6Leo/whispr-stream/releases) and download `WhisprStream-macos-arm64.zip` from the latest published release.
-2. Extract the ZIP and move **WhisprStream** to your Applications folder.
-3. Open WhisprStream normally.
-4. If macOS blocks it, open **System Settings → Privacy & Security**. Find the WhisprStream message under Security, click **Open Anyway**, authenticate, and confirm **Open**.
+1. Open [GitHub Releases](https://github.com/JPtheJP/speekium/releases) and download `Speekium-macos-arm64.zip` from the latest published release.
+2. Extract the ZIP and move **Speekium** to your Applications folder.
+3. Open Speekium normally.
+4. If macOS blocks it, open **System Settings → Privacy & Security**. Find the Speekium message under Security, click **Open Anyway**, authenticate, and confirm **Open**.
 
-The release is signed with WhisprStream's stable self-signed identity but is not notarized by Apple. The Open Anyway step is expected. Do not disable Gatekeeper globally.
+The release is signed with Speekium's stable self-signed identity but is not notarized by Apple. The Open Anyway step is expected. Do not disable Gatekeeper globally.
 
 ## First launch
 
 The app keeps the speech engine and speech model as separate downloads:
 
-- The exact engine download and installed sizes are shown in Setup Guide before installation. It is stored in `~/Library/Application Support/WhisprStream/Runtime` and is reused across app updates.
+- The exact engine download and installed sizes are shown in Setup Guide before installation. It is stored in `~/Library/Application Support/Speekium/Runtime` and is reused across app updates.
 - Qwen3-ASR 0.6B is approximately 1.9 GB installed and is recommended for most Macs. Plan for at least 4 GB free for a complete installation.
 - Qwen3-ASR 1.7B is approximately 4.3 GB installed. It is larger and slower, may improve difficult audio, and is best with 16 GB or more unified memory. Plan for about 6 GB free.
 
@@ -32,13 +32,13 @@ Local source builds enable the experiment by default. In those builds, open **Se
 
 Hugging Face repositories are checked for the selected engine's required files before download. Local folders are validated immediately, remain in their original location, and must stay available while selected. **Forget Model** removes only the saved entry; it never deletes the local folder or cached weights.
 
-To test the public configuration from source, build with `ENABLE_OPTIONAL_MODELS=0 WhisprStream/build.sh`.
+To test the public configuration from source, build with `ENABLE_OPTIONAL_MODELS=0 Speekium/build.sh`.
 
 ## Permissions and menu-bar behavior
 
 Onboarding asks for Microphone access and Accessibility access. Microphone is needed to capture speech; Accessibility is needed to see the recording shortcut globally and insert text at the cursor. If you choose **Skip for now**, the final screen will say **Finish setup later** and you can grant access from **Settings → Permissions**.
 
-WhisprStream runs in the menu bar rather than the Dock. Choose **Setup Guide…** from the menu-bar icon to reopen onboarding. Choose **Settings…** for model, engine, permissions, vocabulary, shortcuts, and preferences.
+Speekium runs in the menu bar rather than the Dock. Choose **Setup Guide…** from the menu-bar icon to reopen onboarding. Choose **Settings…** for model, engine, permissions, vocabulary, shortcuts, and preferences.
 
 ## Recovery and storage cleanup
 
@@ -50,16 +50,16 @@ WhisprStream runs in the menu bar rather than the Dock. Choose **Setup Guide…*
 
 ## Updates
 
-In **Settings → About**, choose **Check for Updates**. When a stable update is available, **Install and Relaunch** downloads the app ZIP, verifies its Ed25519 release signature, replaces the installed app, and reopens it. If WhisprStream is running from a read-only location, move it to Applications and try again or use **Open GitHub Releases…** for a manual replacement. The runtime, models, settings, vocabulary, and shortcuts remain in your user Library.
+In **Settings → About**, choose **Check for Updates**. When a stable update is available, **Install and Relaunch** downloads the app ZIP, verifies its Ed25519 release signature, replaces the installed app, and reopens it. If Speekium is running from a read-only location, move it to Applications and try again or use **Open GitHub Releases…** for a manual replacement. The runtime, models, settings, vocabulary, and shortcuts remain in your user Library.
 
 ## Uninstall
 
 Remove these items separately according to what you want to keep:
 
-- `/Applications/WhisprStream.app` — the native app.
-- `~/Library/Application Support/WhisprStream/Runtime` — the private speech engine.
+- `/Applications/Speekium.app` — the native app.
+- `~/Library/Application Support/Speekium/Runtime` — the private speech engine.
 - `~/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-0.6B`, `models--Qwen--Qwen3-ASR-1.7B`, and any custom Hugging Face model repositories — optional model caches at the default Hugging Face cache location. A custom `HF_HUB_CACHE` or `HF_HOME` location may be elsewhere.
-- WhisprStream preferences in `~/Library/Preferences` — settings, vocabulary, and shortcuts.
-- `~/Library/Logs/WhisprStream.log` — diagnostic logs.
+- Speekium preferences in `~/Library/Preferences` — settings, vocabulary, and shortcuts.
+- `~/Library/Logs/Speekium.log` — diagnostic logs.
 
 Removing the app does not automatically remove the runtime, model caches, preferences, or logs.

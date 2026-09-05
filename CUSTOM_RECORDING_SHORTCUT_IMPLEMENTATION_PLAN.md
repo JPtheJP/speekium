@@ -1,6 +1,6 @@
 # Arbitrary Recording Shortcut — Implementation Plan
 
-Issue: [#4 — Support arbitrary custom recording shortcuts](https://github.com/Leo6Leo/whispr-stream/issues/4)
+Issue: [#4 — Support arbitrary custom recording shortcuts](https://github.com/JPtheJP/speekium/issues/4)
 
 Prepared: 2026-08-23
 
@@ -37,7 +37,7 @@ The implementation should be a focused hotkey/preferences change. It must not al
 
 ### 2.1 Data and persistence
 
-`WhisprStream/Sources/WhisprStream/Settings.swift`
+`Speekium/Sources/Speekium/Settings.swift`
 
 - `TriggerKey` is a five-case enum containing a physical modifier key code, aggregate modifier flag, label, and symbol.
 - `Settings.triggerKey` is persisted as a raw string under the unversioned `triggerKey` UserDefaults key.
@@ -47,10 +47,10 @@ The implementation should be a focused hotkey/preferences change. It must not al
 
 ### 2.2 Runtime monitoring
 
-`WhisprStream/Sources/WhisprStream/HotKeyMonitor.swift`
+`Speekium/Sources/Speekium/HotKeyMonitor.swift`
 
 - The monitor listens only for `.flagsChanged` events.
-- A global NSEvent monitor handles other applications; a local NSEvent monitor handles WhisprStream itself.
+- A global NSEvent monitor handles other applications; a local NSEvent monitor handles Speekium itself.
 - It matches one modifier key code and infers press/release from the modifier flag.
 - It contains the Hold to Talk and Tap to Toggle state machine.
 - Rebinding stops an active dictation, changes the configuration, and reinstalls monitors.
@@ -58,37 +58,37 @@ The implementation should be a focused hotkey/preferences change. It must not al
 
 ### 2.3 Runtime wiring and user-facing copies
 
-`WhisprStream/Sources/WhisprStream/WhisprStreamApp.swift`
+`Speekium/Sources/Speekium/SpeekiumApp.swift`
 
 - Constructs and starts `HotKeyMonitor`.
 - Rebinds it through `Settings.onChange`.
 - Builds the menu-bar hint from `TriggerKey.symbol` and `TriggerKey.label`.
 - Passes the trigger to the first-dictation coach.
 
-`WhisprStream/Sources/WhisprStream/SettingsView.swift`
+`Speekium/Sources/Speekium/SettingsView.swift`
 
 - General → Dictation contains a segmented activation-mode picker and a fixed trigger-key picker.
 
-`WhisprStream/Sources/WhisprStream/OnboardingView.swift`
+`Speekium/Sources/Speekium/OnboardingView.swift`
 
 - The preferences step uses the same fixed trigger-key choices.
 - The ready step interpolates the selected key label.
 
-`WhisprStream/Sources/WhisprStream/FirstDictationCoach.swift`
+`Speekium/Sources/Speekium/FirstDictationCoach.swift`
 
 - Accepts `TriggerKey` and renders a fixed-width key cap and instruction.
 
-`WhisprStream/Sources/WhisprStream/AppWindows.swift`
+`Speekium/Sources/Speekium/AppWindows.swift`
 
 - Threads `TriggerKey` into the first-dictation coach panel.
 
 ### 2.4 Existing coverage
 
-`WhisprStream/Tests/WhisprStreamTests/HotKeyMonitorTests.swift`
+`Speekium/Tests/SpeekiumTests/HotKeyMonitorTests.swift`
 
 - Covers only external timeout recovery for Right Option in hold/tap modes.
 
-`WhisprStream/Tests/WhisprStreamTests/VoiceShortcutSettingsTests.swift`
+`Speekium/Tests/SpeekiumTests/VoiceShortcutSettingsTests.swift`
 
 - Covers first-dictation coach copy for Right Option and Fn.
 - Provides the existing isolated UserDefaults test pattern.
@@ -113,7 +113,7 @@ Consequence: a user-selected chord can still be seen by the active application o
 
 ### 4.1 Add a versioned shortcut value
 
-Create `WhisprStream/Sources/WhisprStream/TriggerShortcut.swift`.
+Create `Speekium/Sources/Speekium/TriggerShortcut.swift`.
 
 Recommended responsibilities:
 
@@ -428,7 +428,7 @@ For a chord held during an external stop:
 
 ### 7.1 New file and implementation surface
 
-Create `WhisprStream/Sources/WhisprStream/TriggerShortcutRecorder.swift`.
+Create `Speekium/Sources/Speekium/TriggerShortcutRecorder.swift`.
 
 Use an `NSViewRepresentable` backed by a small `NSView` subclass rather than relying only on SwiftUI keyboard shortcuts.
 
@@ -501,7 +501,7 @@ Use idempotent Settings methods so duplicate cleanup calls are harmless.
 
 ## 8. Runtime and copy updates
 
-### 8.1 WhisprStreamApp.swift
+### 8.1 SpeekiumApp.swift
 
 Update all `settings.triggerKey` references to `settings.triggerShortcut`.
 
@@ -552,7 +552,7 @@ Generic phrases such as `trigger key` can remain, but `recording shortcut` is cl
 
 ## 9. File-by-file implementation checklist
 
-### New: `Sources/WhisprStream/TriggerShortcut.swift`
+### New: `Sources/Speekium/TriggerShortcut.swift`
 
 - Add `TriggerModifiers`.
 - Add semantic primary-key descriptors.
@@ -562,14 +562,14 @@ Generic phrases such as `trigger key` can remain, but `recording shortcut` is cl
 - Add display/accessibility formatting.
 - Add F13–F24 recognition through `NSEvent.SpecialKey`.
 
-### New: `Sources/WhisprStream/TriggerShortcutRecorder.swift`
+### New: `Sources/Speekium/TriggerShortcutRecorder.swift`
 
 - Add the first-responder AppKit capture view.
 - Add SwiftUI wrapper/coordinator.
 - Add recorder sheet and reusable display/control.
 - Implement Save, Cancel, Escape, invalid-message, and cleanup paths.
 
-### Modify: `Sources/WhisprStream/Settings.swift`
+### Modify: `Sources/Speekium/Settings.swift`
 
 - Retain `TriggerKey` as legacy modifier-only metadata.
 - Replace `triggerKey` preference with `triggerShortcut`.
@@ -578,7 +578,7 @@ Generic phrases such as `trigger key` can remain, but `recording shortcut` is cl
 - Add transient capture-state coordination.
 - Update/rename the hotkey configuration callback.
 
-### Modify: `Sources/WhisprStream/HotKeyMonitor.swift`
+### Modify: `Sources/Speekium/HotKeyMonitor.swift`
 
 - Accept `TriggerShortcut`.
 - Monitor flags-changed, key-down, and key-up events.
@@ -587,31 +587,31 @@ Generic phrases such as `trigger key` can remain, but `recording shortcut` is cl
 - Add exact modifier matching, repeat suppression, release-order handling, and suspension.
 - Preserve timeout cancellation.
 
-### Modify: `Sources/WhisprStream/SettingsView.swift`
+### Modify: `Sources/Speekium/SettingsView.swift`
 
 - Replace the fixed picker with the reusable recorder control.
 - Add Change… and Reset to Default.
 - Present validation without modifying the saved value.
 
-### Modify: `Sources/WhisprStream/OnboardingView.swift`
+### Modify: `Sources/Speekium/OnboardingView.swift`
 
 - Use the new recorder control/value.
 - Update ready-step text.
 - Remove bindings that assume every value is a `TriggerKey` enum case.
 
-### Modify: `Sources/WhisprStream/WhisprStreamApp.swift`
+### Modify: `Sources/Speekium/SpeekiumApp.swift`
 
 - Construct and rebind with `triggerShortcut`.
 - Wire recorder suspension.
 - Update menu hint formatting.
 - Pass the new value to the first-dictation coach.
 
-### Modify: `Sources/WhisprStream/FirstDictationCoach.swift`
+### Modify: `Sources/Speekium/FirstDictationCoach.swift`
 
 - Accept/display arbitrary shortcuts.
 - Update instruction formatting and adaptive layout.
 
-### Modify: `Sources/WhisprStream/AppWindows.swift`
+### Modify: `Sources/Speekium/AppWindows.swift`
 
 - Thread `TriggerShortcut` into coach creation.
 
@@ -695,7 +695,7 @@ Update the existing first-dictation coach test to cover:
 
 ### 10.5 Required command
 
-Run from `WhisprStream/`:
+Run from `Speekium/`:
 
 ```bash
 swift test
@@ -764,7 +764,7 @@ Verify key-repeat and release-order behavior, especially releasing modifiers bef
 - Slack
 - Chrome
 
-The selected shortcut should trigger consistently. Because NSEvent monitors are observational, also note whether the active app performs its own action for the chosen chord. That is conflict information, not a failure unless WhisprStream itself misbehaves.
+The selected shortcut should trigger consistently. Because NSEvent monitors are observational, also note whether the active app performs its own action for the chosen chord. That is conflict information, not a failure unless Speekium itself misbehaves.
 
 ### 11.6 Permission failure
 
@@ -789,7 +789,7 @@ Exit condition: new model round-trips, legacy defaults migrate, and tests pass.
 
 - Refactor `HotKeyMonitor` to the new model.
 - Add key-down/up monitoring, chord matching, F-key support, release-order handling, suspension, and expanded tests.
-- Update `WhisprStreamApp` construction/rebinding enough to compile.
+- Update `SpeekiumApp` construction/rebinding enough to compile.
 
 Exit condition: all runtime state-machine tests pass and modifier-only behavior is unchanged.
 

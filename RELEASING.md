@@ -1,12 +1,12 @@
-# WhisprStream release checklist
+# Speekium release checklist
 
-WhisprStream ships a small native app and a separately downloadable Apple-silicon speech engine. Public builds are ZIPs, are not notarized, and use a stable self-signed identity.
+Speekium ships a small native app and a separately downloadable Apple-silicon speech engine. Public builds are ZIPs, are not notarized, and use a stable self-signed identity.
 
 ## 1. Select and validate the runtime
 
 Use a relocatable standalone CPython 3.12 distribution. Do not use Homebrew Python or a venv.
 
-Public app version `1.0.2` compiles optional models out and intentionally reuses the immutable `WhisprStream-runtime-1.0.0-arm64.zip` asset. Do not rebuild or replace that asset under its existing version or URL. The signed app also pins the complete extracted runtime tree, including the bytecode shipped in that immutable archive; installed runtime verification never deletes or rewrites files.
+Public app version `1.0.2` compiles optional models out and intentionally reuses the immutable `Speekium-runtime-1.0.0-arm64.zip` asset. Do not rebuild or replace that asset under its existing version or URL. The signed app also pins the complete extracted runtime tree, including the bytecode shipped in that immutable archive; installed runtime verification never deletes or rewrites files.
 
 The current `build-runtime.sh` includes the experimental MLX Whisper adapter and is for a future runtime version only. Before enabling optional models publicly, resolve the deferred model-validation work, assign a new immutable runtime version (for example `1.1.0`), build it, and update every runtime value below.
 
@@ -15,16 +15,16 @@ The current `build-runtime.sh` includes the experimental MLX Whisper adapter and
 The app must embed an immutable tag-specific runtime URL, never `latest/download`:
 
 The updater's Ed25519 private key lives only in the macOS login Keychain. Its
-public key is checked in at `WhisprStream/update-public-key.txt` and embedded in
+public key is checked in at `Speekium/update-public-key.txt` and embedded in
 every build. Generate the key only once; subsequent invocations print the same
 public key:
 
 ```bash
-swift build -c release --package-path WhisprStream \
-  --product WhisprStreamUpdateSigner
-codesign --force --options runtime,library --sign "WhisprStream Self-Signed" \
-  WhisprStream/.build/release/WhisprStreamUpdateSigner
-WhisprStream/.build/release/WhisprStreamUpdateSigner generate
+swift build -c release --package-path Speekium \
+  --product SpeekiumUpdateSigner
+codesign --force --options runtime,library --sign "Speekium Self-Signed" \
+  Speekium/.build/release/SpeekiumUpdateSigner
+Speekium/.build/release/SpeekiumUpdateSigner generate
 ```
 
 Always use the stably signed release tool for `generate`, `export`, and `sign`.
@@ -34,14 +34,14 @@ rebuilds; do not create the production key with an ad-hoc debug executable.
 Back up the private key to encrypted offline storage, never to this repository:
 
 ```bash
-WhisprStream/.build/release/WhisprStreamUpdateSigner export \
-  /path/outside/the/repository/WhisprStream-update-private-key.txt
+Speekium/.build/release/SpeekiumUpdateSigner export \
+  /path/outside/the/repository/Speekium-update-private-key.txt
 ```
 
 Losing both the Keychain item and its backup breaks the automatic-update chain
 for installed versions. Do not rotate this key as part of a normal release.
 The expected code-signing certificate SHA-1 is independently pinned in
-`WhisprStream/release-signing-certificate-sha1.txt`. The release builder rejects
+`Speekium/release-signing-certificate-sha1.txt`. The release builder rejects
 an update key, repository, or signing identity that differs from these reviewed
 trust roots. Change a pin only as an explicit key-rotation procedure.
 
@@ -50,18 +50,18 @@ version changes only when the standalone Python or dependency payload changes.
 
 ```bash
 RELEASE=1 VERSION=1.0.2 BUILD_NUMBER=4 ENABLE_OPTIONAL_MODELS=0 \
-BUNDLE_IDENTIFIER="com.leoleo.whisprstream" \
-SIGNING_IDENTITY="WhisprStream Self-Signed" \
+BUNDLE_IDENTIFIER="com.jpthejp.speekium" \
+SIGNING_IDENTITY="Speekium Self-Signed" \
 RUNTIME_VERSION=1.0.0 \
-RUNTIME_URL="https://github.com/Leo6Leo/whispr-stream/releases/download/v1.0.0/WhisprStream-runtime-1.0.0-arm64.zip" \
+RUNTIME_URL="https://github.com/JPtheJP/speekium/releases/download/v1.0.0/Speekium-runtime-1.0.0-arm64.zip" \
 RUNTIME_SHA256="b155e21c0bad58d9566430205d0226d7e9066f7b7b7886c7107a53e5a33e221f" \
 RUNTIME_CONTENT_SHA256="747eba6e37c2997070ae995c0ca64c116b01071f4f086ccfecf27073a166e0f8" \
 RUNTIME_ARCHIVE_BYTES="78119418" \
 RUNTIME_INSTALLED_BYTES="248872960" \
-WhisprStream/build.sh
+Speekium/build.sh
 ```
 
-`RELEASE=1` fails if optional models are enabled, if any runtime value is missing, malformed, zero, non-HTTPS, or if the bundle identifier is not `com.leoleo.whisprstream`. It also fails without a signing identity; it never silently falls back to ad-hoc signing. Release compilation remaps the repository root to `/src`, strips linker-generated `N_OSO` debug records, and both the builder and validator reject executables containing `/Users/` or `/home/` build-machine paths.
+`RELEASE=1` fails if optional models are enabled, if any runtime value is missing, malformed, zero, non-HTTPS, or if the bundle identifier is not `com.jpthejp.speekium`. It also fails without a signing identity; it never silently falls back to ad-hoc signing. Release compilation remaps the repository root to `/src`, strips linker-generated `N_OSO` debug records, and both the builder and validator reject executables containing `/Users/` or `/home/` build-machine paths.
 The same release identity is also applied to the update-signing utility so it
 can reuse the protected Keychain item when the utility is rebuilt.
 
@@ -69,9 +69,9 @@ Archive the app with macOS metadata preserved:
 
 ```bash
 ditto -c -k --sequesterRsrc --keepParent \
-  WhisprStream.app WhisprStream-macos-arm64.zip
-WhisprStream/.build/release/WhisprStreamUpdateSigner sign \
-  WhisprStream-macos-arm64.zip WhisprStream-macos-arm64.zip.ed25519
+  Speekium.app Speekium-macos-arm64.zip
+Speekium/.build/release/SpeekiumUpdateSigner sign \
+  Speekium-macos-arm64.zip Speekium-macos-arm64.zip.ed25519
 ```
 
 Create `SHA256SUMS` for all three artifacts and run the read-only validator.
@@ -82,12 +82,12 @@ app with macOS metadata preserved, and rejects an unexpected app version or
 build number:
 
 ```bash
-shasum -a 256 WhisprStream-macos-arm64.zip \
-  WhisprStream-macos-arm64.zip.ed25519 \
-  WhisprStream-runtime-1.0.0-arm64.zip > SHA256SUMS
-WhisprStream/validate-release.sh WhisprStream-macos-arm64.zip \
-  WhisprStream-runtime-1.0.0-arm64.zip SHA256SUMS \
-  WhisprStream-macos-arm64.zip.ed25519 1.0.2 4
+shasum -a 256 Speekium-macos-arm64.zip \
+  Speekium-macos-arm64.zip.ed25519 \
+  Speekium-runtime-1.0.0-arm64.zip > SHA256SUMS
+Speekium/validate-release.sh Speekium-macos-arm64.zip \
+  Speekium-runtime-1.0.0-arm64.zip SHA256SUMS \
+  Speekium-macos-arm64.zip.ed25519 1.0.2 4
 ```
 
 ## Local updater dry runs
@@ -96,7 +96,7 @@ No GitHub Release is needed to exercise the updater. Run the non-interactive
 helper harness first:
 
 ```bash
-WhisprStream/test-updater-e2e.sh
+Speekium/test-updater-e2e.sh
 ```
 
 It builds the real helper and tests successful replacement, missing-executable
@@ -104,11 +104,11 @@ and missing-health-signal rollback, cleanup, and unsafe-path rejection using
 disposable app bundles under `/tmp`. It never touches the repository app or
 `/Applications`.
 
-To exercise the actual Settings → About UI, quit every running WhisprStream
+To exercise the actual Settings → About UI, quit every running Speekium
 instance and run:
 
 ```bash
-WhisprStream/run-mock-update.sh success
+Speekium/run-mock-update.sh success
 ```
 
 The script builds fresh debug executables, creates current and replacement app
@@ -120,19 +120,19 @@ installed, and press Control-C in Terminal to remove the test environment.
 Repeat the UI flow for the expected failure states:
 
 ```bash
-WhisprStream/run-mock-update.sh tampered-signature
-WhisprStream/run-mock-update.sh wrong-size
-WhisprStream/run-mock-update.sh wrong-version
+Speekium/run-mock-update.sh tampered-signature
+Speekium/run-mock-update.sh wrong-size
+Speekium/run-mock-update.sh wrong-version
 ```
 
 Use `--prepare-only` to validate creation and HTTP serving without opening the
-app. The `WHISPR_UPDATE_FEED_URL` override exists only in debug builds, accepts
+app. The `SPEEKIUM_UPDATE_FEED_URL` override exists only in debug builds, accepts
 only loopback HTTP URLs, and is compiled out of release builds. Production
 builds continue to require HTTPS GitHub release and asset URLs.
 
 ## 3. Stable self-signing
 
-Create one certificate using [`make-signing-cert.md`](WhisprStream/make-signing-cert.md), keep its private key outside the repository, and back it up securely. Reuse the same identity for every release; losing the key changes the app's code identity and may require permissions to be granted again.
+Create one certificate using [`make-signing-cert.md`](Speekium/make-signing-cert.md), keep its private key outside the repository, and back it up securely. Reuse the same identity for every release; losing the key changes the app's code identity and may require permissions to be granted again.
 
 Self-signing does not provide Apple trust, does not notarize the app, and does not remove the unknown-developer warning. Release notes must point users to **System Settings → Privacy & Security → Open Anyway**. Never tell users to disable Gatekeeper or run broad `xattr` commands.
 
@@ -140,9 +140,9 @@ Self-signing does not provide Apple trust, does not notarize the app, and does n
 
 For this release, create a draft GitHub Release tagged `v1.0.2`, upload:
 
-- `WhisprStream-macos-arm64.zip`
-- `WhisprStream-macos-arm64.zip.ed25519`
-- `WhisprStream-runtime-1.0.0-arm64.zip`
+- `Speekium-macos-arm64.zip`
+- `Speekium-macos-arm64.zip.ed25519`
+- `Speekium-runtime-1.0.0-arm64.zip`
 - `SHA256SUMS`
 
 Then download both assets back from GitHub and verify their hashes. Before publishing, test the browser-downloaded, quarantined app on:
@@ -157,7 +157,7 @@ Record failure-state screenshots and logs. Verify that an app replacement preser
 
 ## 5. Website and update checks
 
-Confirm the website's download link resolves to the stable app asset and that all source links resolve to [github.com/Leo6Leo/whispr-stream](https://github.com/Leo6Leo/whispr-stream). The website must not advertise a Homebrew command until a real Cask exists.
+Confirm the website's download link resolves to the stable app asset and that all source links resolve to [github.com/JPtheJP/speekium](https://github.com/JPtheJP/speekium). The website must not advertise a Homebrew command until a real Cask exists.
 
 In Settings → About, confirm that the update checker accepts exact stable semantic versions such as `v1.0.2`, ignores drafts and prereleases, rejects missing, oversized, duplicate, or incorrectly signed assets, and offers **Install and Relaunch** only after discovering both exact update assets. Test a valid signed update end to end from a writable copy in Applications, including relaunch after a quarantined download, plus tampered-signature and read-only-location failures. Quarantine is cleared only from a replacement that has passed the pinned Ed25519 signature and bundle checks. The manual GitHub button must remain available as recovery.
 
@@ -166,8 +166,8 @@ In Settings → About, confirm that the update checker accepts exact stable sema
 Local builds can use the prepared venv. To exercise the first-run UI without touching real runtime, model, preference, or permission files:
 
 ```bash
-# Quit any currently running WhisprStream menu-bar process first.
-WHISPR_TEST_FIRST_RUN=1 WhisprStream.app/Contents/MacOS/WhisprStream
+# Quit any currently running Speekium menu-bar process first.
+SPEEKIUM_TEST_FIRST_RUN=1 Speekium.app/Contents/MacOS/Speekium
 ```
 
 The flag belongs to the process being launched; opening the app from Finder,
@@ -175,7 +175,7 @@ or leaving an older menu-bar instance running, does not pass it to that
 instance. Local builds also accept the equivalent explicit argument:
 
 ```bash
-WhisprStream.app/Contents/MacOS/WhisprStream --whispr-test-first-run
+Speekium.app/Contents/MacOS/Speekium --speekium-test-first-run
 ```
 
 The launch log records `developerTestMode=true` when the simulator is active.
@@ -185,6 +185,6 @@ testing without relaunching.
 This mode is developer-only and is never included as a public runtime path.
 
 Local builds enable experimental optional models by default. Use
-`ENABLE_OPTIONAL_MODELS=0 WhisprStream/build.sh` to reproduce the public 1.0.2
+`ENABLE_OPTIONAL_MODELS=0 Speekium/build.sh` to reproduce the public 1.0.2
 model UI and runtime requirements. `RELEASE=1` always enforces that setting and
 cannot be overridden.

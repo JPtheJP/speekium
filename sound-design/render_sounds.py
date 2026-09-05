@@ -10,7 +10,7 @@ what the page plays.
 The page's own export path renders through `OfflineAudioContext` straight to
 `destination` — no compressor, no master gain — so this does the same.
 
-    ./render_sounds.py            # writes ../WhisprStream/Resources/Sounds/*.caf
+    ./render_sounds.py            # writes ../Speekium/Resources/Sounds/*.caf
 
 CAF rather than WAV because AudioServices reads it with the least startup
 latency, which is the whole point for a sound that fires on a keypress.
@@ -33,7 +33,7 @@ TAIL = 0.15      # index.html renders duration + 0.15s
 OFFSET = 0.005   # ...and builds at t=0.005
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "..", "WhisprStream", "Resources", "Sounds")
+                       "..", "Speekium", "Resources", "Sounds")
 
 
 # ---------------------------------------------------------------------------

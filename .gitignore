@@ -9,14 +9,14 @@ __pycache__/
 *.pyc
 
 # Locally built application bundle
-WhisprStream.app/
-/WhisprStream Migration Test.app/
+Speekium.app/
+/Speekium Migration Test.app/
 
 # ML model weights
 models/
 
 # Swift build artifacts
-WhisprStream/.build/
+Speekium/.build/
 
 # Local HUD prototypes
 warmup-preview/

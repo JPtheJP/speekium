@@ -43,7 +43,7 @@ def test_whisper_runtime_omits_conversion_only_pytorch_dependency():
 
 def test_setup_and_release_runtime_install_whisper_without_dependencies():
     setup = (ROOT / "setup-mac.sh").read_text(encoding="utf-8")
-    release_builder = (ROOT / "WhisprStream/build-runtime.sh").read_text(encoding="utf-8")
+    release_builder = (ROOT / "Speekium/build-runtime.sh").read_text(encoding="utf-8")
 
     assert "requirements-macos-arm64-nodeps.txt" in setup
     assert "requirements-macos-arm64-nodeps.lock" in release_builder
@@ -56,7 +56,7 @@ def test_release_runtime_uses_complete_hash_locked_inputs():
     direct_nodeps = requirement_versions(ROOT / "requirements-macos-arm64-nodeps.txt")
     regular_lock = locked_requirement_versions(ROOT / "requirements-macos-arm64.lock")
     nodeps_lock = locked_requirement_versions(ROOT / "requirements-macos-arm64-nodeps.lock")
-    script = (ROOT / "WhisprStream" / "build-runtime.sh").read_text(encoding="utf-8")
+    script = (ROOT / "Speekium" / "build-runtime.sh").read_text(encoding="utf-8")
 
     assert direct == {name: regular_lock[name] for name in direct}
     assert direct_nodeps == nodeps_lock == {"mlx-whisper": "0.4.3"}
@@ -69,16 +69,16 @@ def test_release_runtime_uses_complete_hash_locked_inputs():
 
 
 def test_release_build_compiles_out_developer_runtime_overrides():
-    build_script = (ROOT / "WhisprStream" / "build.sh").read_text(encoding="utf-8")
+    build_script = (ROOT / "Speekium" / "build.sh").read_text(encoding="utf-8")
     runtime_manager = (
-        ROOT / "WhisprStream/Sources/WhisprStream/RuntimeManager.swift"
+        ROOT / "Speekium/Sources/Speekium/RuntimeManager.swift"
     ).read_text(encoding="utf-8")
 
-    assert "WHISPR_RELEASE" in build_script
-    assert "#if WHISPR_RELEASE" in runtime_manager
+    assert "SPEEKIUM_RELEASE" in build_script
+    assert "#if SPEEKIUM_RELEASE" in runtime_manager
 
 
 def test_bundled_and_development_engine_sources_stay_in_sync():
     assert (ROOT / "asr_engine.py").read_bytes() == (
-        ROOT / "WhisprStream/Resources/asr_engine.py"
+        ROOT / "Speekium/Resources/asr_engine.py"
     ).read_bytes()
