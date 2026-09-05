@@ -25,3 +25,10 @@ warmup-preview/
 .DS_Store
 assets/icon/AppIcon.iconset/
 assets/icon/icon-1024.png
+
+# build-runtime.sh / release outputs (generated at release time, never committed)
+/Speekium-runtime-*-arm64.zip
+/Speekium-runtime-*.metadata.json
+/Speekium-macos-arm64.zip
+/Speekium-macos-arm64.zip.ed25519
+/SHA256SUMS
