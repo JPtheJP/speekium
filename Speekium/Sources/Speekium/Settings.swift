@@ -5,7 +5,7 @@ import SwiftUI
 ///
 /// Only modifiers are offered: they arrive as `.flagsChanged` and don't collide
 /// with an app's own keyboard shortcuts the way a plain letter key would.
-enum TriggerKey: String, CaseIterable, Identifiable {
+enum TriggerKey: String, CaseIterable, Identifiable, Codable {
     case rightOption, leftOption, rightCommand, rightControl, function
 
     var id: String { rawValue }
@@ -76,11 +76,11 @@ enum ActivationMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// Language guidance for clips too short to provide reliable language context.
-/// Longer utterances always keep automatic multilingual recognition.
+/// Optional language guidance for clips too short to provide reliable language
+/// context. Automatic mode preserves multilingual recognition at every length;
+/// fixed choices remain available for isolated words that need a tie-breaker.
 enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
-    case smartAutomatic
-    case smartEnglishChinese
+    case automaticMultilingual
     case chinese, english, cantonese, arabic, german, french, spanish
     case portuguese, indonesian, italian, korean, russian, thai, vietnamese
     case japanese, turkish, hindi, malay, dutch, swedish, danish, finnish
@@ -92,8 +92,7 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
     /// canonical forced-language names.
     var modelName: String {
         switch self {
-        case .smartAutomatic: return "Smart (automatic)"
-        case .smartEnglishChinese: return "Smart English + Chinese"
+        case .automaticMultilingual: return "Automatic multilingual"
         case .chinese: return "Chinese"
         case .english: return "English"
         case .cantonese: return "Cantonese"
@@ -127,18 +126,24 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
         }
     }
 
-    /// A fixed Qwen language name, or nil when the app should select a hint
-    /// from the active writing context for this individual utterance.
+    /// A fixed Qwen language name, or nil when the model should infer the
+    /// spoken language directly from the audio.
     var fixedModelLanguage: String? {
-        usesCursorContext ? nil : modelName
+        self == .automaticMultilingual ? nil : modelName
     }
 
-    /// Smart modes read the text near the cursor to pick a per-utterance hint,
-    /// so the app must capture that context when dictation starts.
-    var usesCursorContext: Bool {
-        switch self {
-        case .smartAutomatic, .smartEnglishChinese: return true
-        default: return false
+    /// Decode both the current stored value and names used by earlier builds.
+    /// The old smart mode guessed from cursor/keyboard context; migrate it to
+    /// automatic audio detection so writing context cannot force-translate a
+    /// language switch.
+    static func persistedValue(_ rawValue: String?) -> Self {
+        switch rawValue {
+        case "smartEnglishChinese", "automatic":
+            return .automaticMultilingual
+        case let rawValue?:
+            return Self(rawValue: rawValue) ?? .automaticMultilingual
+        case nil:
+            return .automaticMultilingual
         }
     }
 }
@@ -148,12 +153,20 @@ enum ShortUtteranceLanguage: String, CaseIterable, Identifiable {
 final class Settings: ObservableObject {
     static let shared = Settings()
 
-    @Published var triggerKey: TriggerKey {
-        didSet { defaults.set(triggerKey.rawValue, forKey: Keys.triggerKey); onChange?() }
+    @Published var triggerShortcut: TriggerShortcut {
+        didSet {
+            guard triggerShortcut != oldValue else { return }
+            persistTriggerShortcut()
+            onHotKeyConfigurationChange?()
+        }
     }
 
     @Published var activationMode: ActivationMode {
-        didSet { defaults.set(activationMode.rawValue, forKey: Keys.activationMode); onChange?() }
+        didSet {
+            guard activationMode != oldValue else { return }
+            defaults.set(activationMode.rawValue, forKey: Keys.activationMode)
+            onHotKeyConfigurationChange?()
+        }
     }
 
     /// Insert the transcript at the active app's cursor.
@@ -174,8 +187,8 @@ final class Settings: ObservableObject {
     }
 
     /// Match the transcript's opening capitalization to text at the active
-    /// cursor. Apps without readable cursor context require a brief reversible
-    /// keyboard probe, so users can disable this when minimum latency matters.
+    /// cursor. Apps without readable cursor context use a guarded keyboard
+    /// probe that must finish before the transcript is inserted.
     @Published var contextAwareCapitalization: Bool {
         didSet {
             defaults.set(
@@ -326,6 +339,18 @@ final class Settings: ObservableObject {
         voiceShortcuts[index].isEnabled = enabled
     }
 
+    /// Replaces the complete shortcut list after validating the same invariants
+    /// as the editor. Used by import so invalid or duplicate triggers can never
+    /// bypass normal shortcut validation.
+    func setVoiceShortcuts(_ shortcuts: [VoiceShortcut]) throws {
+        var validated: [VoiceShortcut] = []
+        for shortcut in shortcuts {
+            try VoiceShortcutValidation.validate(shortcut, against: validated)
+            validated.append(shortcut)
+        }
+        voiceShortcuts = validated
+    }
+
     private func persistVoiceShortcuts() {
         guard let data = try? JSONEncoder().encode(voiceShortcuts) else {
             Log.write("voice shortcuts save failed")
@@ -340,6 +365,21 @@ final class Settings: ObservableObject {
         vocabularyEntries = VocabularyEntry.normalizedUnique(entries)
     }
 
+    /// User-added model definitions. The weights themselves remain in the
+    /// selected local folder or Hugging Face cache.
+    @Published private(set) var customModels: [ASRModel] {
+        didSet {
+            guard FeatureFlags.optionalModelsEnabled else { return }
+            persistCustomModels()
+        }
+    }
+
+    var availableModels: [ASRModel] {
+        FeatureFlags.optionalModelsEnabled
+            ? ASRModel.allCases + customModels
+            : ASRModel.allCases
+    }
+
     /// Which speech model the sidecar loads.
     ///
     /// Unlike the vocabulary this cannot be applied live — the weights are loaded
@@ -347,7 +387,19 @@ final class Settings: ObservableObject {
     /// model load again.
     @Published var model: ASRModel {
         didSet {
+            guard FeatureFlags.optionalModelsEnabled || model.isBuiltIn else {
+                // A public build may inherit an experimental preference from a
+                // developer build. Keep that preference stored for developers,
+                // but never select or launch it in the public product.
+                model = oldValue.isBuiltIn ? oldValue : .small
+                return
+            }
             guard model != oldValue else { return }
+            if let data = try? JSONEncoder().encode(model) {
+                defaults.set(data, forKey: Keys.selectedModel)
+            }
+            // Keep the original key current for backwards compatibility with
+            // older builds and the existing preferences migration.
             defaults.set(model.rawValue, forKey: Keys.model)
             onModelChange?(model)
         }
@@ -357,12 +409,29 @@ final class Settings: ObservableObject {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.onboarded) }
     }
 
+    /// Remains true until the first-dictation invitation is either displayed
+    /// or made unnecessary by the user starting a dictation themselves.
+    /// Keeping this separate from onboarding lets a user grant permissions
+    /// after setup (or after relaunching) without losing the invitation.
+    @Published var needsFirstDictationCoach: Bool {
+        didSet { defaults.set(needsFirstDictationCoach, forKey: Keys.firstDictationCoachPending) }
+    }
+
     /// True while the sidecar is reloading after a model switch. Drives the
     /// Settings UI only; the HUD has its own `.loading` phase.
     @Published var isReloadingModel = false
 
     /// Fired when a change requires the hotkey monitor to be rebound.
-    var onChange: (() -> Void)?
+    var onHotKeyConfigurationChange: (() -> Void)?
+
+    /// True while the local shortcut recorder owns keyboard input.
+    /// This state is intentionally transient and is not persisted.
+    @Published private(set) var isCapturingTriggerShortcut = false
+    private var triggerShortcutCaptureCount = 0
+
+    /// Fired when the recorder starts or ends so the global hotkey monitor can
+    /// get out of the way of the Settings/onboarding window.
+    var onTriggerShortcutCaptureChange: ((Bool) -> Void)?
 
     /// Fired when vocabulary or Voice Shortcuts change, to push the combined
     /// context to the live sidecar.
@@ -379,6 +448,7 @@ final class Settings: ObservableObject {
 
     private enum Keys {
         static let triggerKey = "triggerKey"
+        static let triggerShortcut = "triggerShortcut.v1"
         static let activationMode = "activationMode"
         static let autoInsert = "autoInsert"
         static let copyToClipboard = "copyToClipboard"
@@ -393,13 +463,33 @@ final class Settings: ObservableObject {
         static let vocabularyEntries = "vocabularyEntries"
         static let voiceShortcuts = "voiceShortcuts.v1"
         static let model = "model"
+        static let selectedModel = "selectedModel.v2"
+        static let customModels = "customModels.v1"
         static let onboarded = "hasCompletedOnboarding"
+        static let firstDictationCoachPending = "needsFirstDictationCoach"
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        triggerKey = TriggerKey(rawValue: defaults.string(forKey: Keys.triggerKey) ?? "")
-            ?? .rightOption
+
+        let storedShortcut: TriggerShortcut? = {
+            guard let data = defaults.data(forKey: Keys.triggerShortcut) else { return nil }
+            do {
+                let shortcut = try JSONDecoder().decode(TriggerShortcut.self, from: data)
+                guard let validated = TriggerShortcut.validated(shortcut) else {
+                    Log.write("trigger shortcut is invalid; trying legacy setting")
+                    return nil
+                }
+                return validated
+            } catch {
+                Log.write("trigger shortcut load failed; trying legacy setting")
+                return nil
+            }
+        }()
+        let legacyShortcut = TriggerKey(
+            rawValue: defaults.string(forKey: Keys.triggerKey) ?? ""
+        ).map(TriggerShortcut.modifierOnly)
+        triggerShortcut = storedShortcut ?? legacyShortcut ?? .defaultValue
         activationMode = ActivationMode(rawValue: defaults.string(forKey: Keys.activationMode) ?? "")
             ?? .hold
         autoInsert = defaults.object(forKey: Keys.autoInsert) as? Bool ?? true
@@ -407,12 +497,12 @@ final class Settings: ObservableObject {
         usePunctuation = defaults.object(forKey: Keys.usePunctuation) as? Bool ?? true
         contextAwareCapitalization = defaults.object(
             forKey: Keys.contextAwareCapitalization
-        ) as? Bool ?? true
-        shortUtteranceLanguage = ShortUtteranceLanguage(
-            rawValue: defaults.string(forKey: Keys.shortUtteranceLanguage) ?? ""
-        ) ?? .smartAutomatic
+        ) as? Bool ?? false
+        shortUtteranceLanguage = ShortUtteranceLanguage.persistedValue(
+            defaults.string(forKey: Keys.shortUtteranceLanguage)
+        )
         pauseMediaWhileDictating = defaults.object(forKey: Keys.pauseMediaWhileDictating) as? Bool ?? true
-        playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? false
+        playSound = defaults.object(forKey: Keys.playSound) as? Bool ?? true
         // Migration: before pairs, the choice lived in `insertSound` as a bare
         // alert-sound name. Carry it over so an existing setting is preserved
         // rather than silently reset to a new default.
@@ -420,17 +510,31 @@ final class Settings: ObservableObject {
             ?? SoundTheme(storageValue: defaults.string(forKey: Keys.insertSound) ?? "")
             ?? .pair(.openResolve)
 
-        if let stored = defaults.array(forKey: Keys.vocabularyEntries) as? [String] {
-            vocabularyEntries = VocabularyEntry.normalizedUnique(stored)
+        if let value = defaults.object(forKey: Keys.vocabularyEntries) {
+            if let stored = value as? [String] {
+                vocabularyEntries = VocabularyEntry.normalizedUnique(stored)
+            } else {
+                // Do not silently replace an unexpected current value. Keeping
+                // the object intact makes recovery possible and lets the
+                // one-time legacy migration remain retryable after repair.
+                Log.write("vocabulary load failed; preserving malformed stored value")
+                vocabularyEntries = []
+            }
         } else {
             // Legacy versions stored a whitespace-delimited string. That format
             // cannot recover phrases, but migrating it preserves every existing
             // single-word entry and gives future edits a lossless representation.
-            let legacy = defaults.string(forKey: Keys.contextTerms) ?? ""
-            let entries = legacy.split(whereSeparator: \.isWhitespace).map(String.init)
-            let migrated = VocabularyEntry.normalizedUnique(entries)
-            defaults.set(migrated, forKey: Keys.vocabularyEntries)
-            vocabularyEntries = migrated
+            if let value = defaults.object(forKey: Keys.contextTerms),
+               !(value is String) {
+                Log.write("legacy vocabulary load failed; preserving malformed stored value")
+                vocabularyEntries = []
+            } else {
+                let legacy = defaults.string(forKey: Keys.contextTerms) ?? ""
+                let entries = legacy.split(whereSeparator: \.isWhitespace).map(String.init)
+                let migrated = VocabularyEntry.normalizedUnique(entries)
+                defaults.set(migrated, forKey: Keys.vocabularyEntries)
+                vocabularyEntries = migrated
+            }
         }
         if let data = defaults.data(forKey: Keys.voiceShortcuts) {
             do {
@@ -442,9 +546,119 @@ final class Settings: ObservableObject {
         } else {
             voiceShortcuts = []
         }
-        model = ASRModel(rawValue: defaults.string(forKey: Keys.model) ?? "") ?? .small
-        hasCompletedOnboarding = defaults.bool(forKey: Keys.onboarded)
+        let decodedCustomModels: [ASRModel] = {
+            guard let data = defaults.data(forKey: Keys.customModels),
+                  let values = try? JSONDecoder().decode([ASRModel].self, from: data)
+            else { return [] }
+            return values.filter { !$0.isBuiltIn }
+        }()
+        let decodedSelection: ASRModel = {
+            if let data = defaults.data(forKey: Keys.selectedModel),
+               let value = try? JSONDecoder().decode(ASRModel.self, from: data) {
+                return value
+            }
+            return ASRModel(rawValue: defaults.string(forKey: Keys.model) ?? "") ?? .small
+        }()
+        var uniqueCustomModels: [ASRModel] = []
+        for value in decodedCustomModels where !uniqueCustomModels.contains(value) {
+            uniqueCustomModels.append(value)
+        }
+        if FeatureFlags.optionalModelsEnabled,
+           !decodedSelection.isBuiltIn,
+           !uniqueCustomModels.contains(decodedSelection) {
+            uniqueCustomModels.append(decodedSelection)
+        }
+        // Keep the stored data untouched while the gate is off, but do not
+        // surface it through the running public app.
+        customModels = FeatureFlags.optionalModelsEnabled ? uniqueCustomModels : []
+        model = FeatureFlags.optionalModelsEnabled || decodedSelection.isBuiltIn
+            ? decodedSelection
+            : .small
+        let completedOnboarding = defaults.bool(forKey: Keys.onboarded)
+        hasCompletedOnboarding = completedOnboarding
+        if let pending = defaults.object(forKey: Keys.firstDictationCoachPending) as? Bool {
+            needsFirstDictationCoach = pending
+        } else {
+            // A genuinely new or unfinished installation should receive the
+            // invitation. Existing users upgrading from a version without this
+            // key have already completed setup, so do not replay first-run UI.
+            needsFirstDictationCoach = !completedOnboarding
+            defaults.set(needsFirstDictationCoach, forKey: Keys.firstDictationCoachPending)
+        }
 
         warm(soundTheme)
+        persistTriggerShortcut()
+        if FeatureFlags.optionalModelsEnabled {
+            persistCustomModels()
+        }
+    }
+
+    @discardableResult
+    func addCustomModel(
+        engine: ASREngine,
+        source: ASRModelSource,
+        location: String
+    ) throws -> ASRModel {
+        guard FeatureFlags.optionalModelsEnabled else {
+            throw ASRModelValidationError.optionalModelsUnavailable
+        }
+        let candidate = try ModelCatalog.validatedCustomModel(
+            engine: engine,
+            source: source,
+            location: location
+        )
+        guard !candidate.isBuiltIn else { return candidate }
+        if !customModels.contains(candidate) {
+            customModels.append(candidate)
+        }
+        return candidate
+    }
+
+    /// Removes only the saved definition. Downloaded weights and local folders
+    /// are deliberately left untouched.
+    func forgetCustomModel(_ forgotten: ASRModel) {
+        guard FeatureFlags.optionalModelsEnabled else { return }
+        guard !forgotten.isBuiltIn else { return }
+        if model == forgotten {
+            model = ASRModel.allCases.first(where: {
+                ModelCatalog.state(for: $0).isInstalled
+            }) ?? .small
+        }
+        customModels.removeAll { $0 == forgotten }
+    }
+
+    func resetTriggerShortcut() {
+        triggerShortcut = .defaultValue
+    }
+
+    func beginTriggerShortcutCapture() {
+        triggerShortcutCaptureCount += 1
+        guard triggerShortcutCaptureCount == 1 else { return }
+        isCapturingTriggerShortcut = true
+        onTriggerShortcutCaptureChange?(true)
+    }
+
+    func endTriggerShortcutCapture() {
+        guard triggerShortcutCaptureCount > 0 else { return }
+        triggerShortcutCaptureCount -= 1
+        guard triggerShortcutCaptureCount == 0 else { return }
+        isCapturingTriggerShortcut = false
+        onTriggerShortcutCaptureChange?(false)
+    }
+
+    private func persistTriggerShortcut() {
+        guard let data = try? JSONEncoder().encode(triggerShortcut) else {
+            Log.write("trigger shortcut save failed")
+            return
+        }
+        defaults.set(data, forKey: Keys.triggerShortcut)
+    }
+
+    private func persistCustomModels() {
+        guard let data = try? JSONEncoder().encode(customModels) else {
+            Log.write("custom models save failed")
+            return
+        }
+        defaults.set(data, forKey: Keys.customModels)
     }
 }

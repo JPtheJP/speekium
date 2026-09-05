@@ -3,6 +3,43 @@ import XCTest
 @testable import Speekium
 
 final class ASRServiceTests: XCTestCase {
+    func testSelectedEngineIsPassedToSidecar() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Speekium-ASRServiceTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let script = directory.appendingPathComponent("engine_sidecar.py")
+        try """
+        import json
+        import os
+        import time
+
+        print(json.dumps({"type": "error", "message": os.environ.get("SPEEKIUM_ENGINE")}), flush=True)
+        time.sleep(0.2)
+        """.write(to: script, atomically: true, encoding: .utf8)
+
+        let service = ASRService(
+            python: URL(fileURLWithPath: "/usr/bin/python3"),
+            script: script,
+            model: "unused",
+            engine: .whisper,
+            bits: 8,
+            context: "",
+            shortUtteranceLanguage: .english
+        )
+        let received = expectation(description: "engine reaches sidecar")
+        service.onEvent = { event in
+            if case let .error(message) = event, message == "whisper" {
+                received.fulfill()
+            }
+        }
+        try service.start()
+        defer { service.shutdown() }
+
+        wait(for: [received], timeout: 2)
+    }
+
     func testAudioWritesDoNotBlockWhileSidecarIsStillStarting() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Speekium-ASRServiceTests-\(UUID().uuidString)")

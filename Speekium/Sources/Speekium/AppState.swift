@@ -4,6 +4,7 @@ import SwiftUI
 enum Phase: Equatable {
     case idle
     case loading
+    case ready
     case listening
     case thinking
     case inserted

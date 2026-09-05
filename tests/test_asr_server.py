@@ -70,6 +70,413 @@ class SilenceDetectionTests(unittest.TestCase):
         self.assertEqual(final["mode"], "no-speech")
 
 
+class ContextHallucinationTests(unittest.TestCase):
+    class FakeSession:
+        def __init__(self, unprompted_text):
+            self.unprompted_text = unprompted_text
+            self.calls = []
+
+        def transcribe(self, _audio, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                text=self.unprompted_text,
+                language="English",
+            )
+
+    def make_server(self, unprompted_text):
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = self.FakeSession(unprompted_text)
+        server.short_utterance_language = None
+        server._utterance_short_language = None
+        return server
+
+    def test_detects_complete_context_words_inside_transcript(self):
+        context = "Claude\nCodex\n/retest-required"
+        self.assertTrue(
+            asr_server.transcript_contains_context_word("Use Claude here", context)
+        )
+        self.assertTrue(
+            asr_server.transcript_contains_context_word("CODEX", context)
+        )
+        self.assertFalse(
+            asr_server.transcript_contains_context_word("preClaude", context)
+        )
+
+    def test_non_latin_context_does_not_use_edit_distance_guard(self):
+        self.assertFalse(
+            asr_server.transcript_contains_context_word("你好", "你好")
+        )
+        self.assertFalse(
+            asr_server.transcript_contains_context_word(
+                "你好 GitHub",
+                "你好 GitHub",
+            )
+        )
+
+    def test_near_unprompted_spelling_supports_vocabulary_correction(self):
+        self.assertTrue(
+            asr_server.context_term_has_unprompted_support("Claude", "Cloud")
+        )
+        self.assertEqual(
+            asr_server.best_supported_context_term(
+                "Claude\nLoRA",
+                "Laura",
+            ),
+            "LoRA",
+        )
+        self.assertFalse(
+            asr_server.context_term_has_unprompted_support("Claude", "code")
+        )
+
+    def test_unrelated_or_empty_unprompted_result_rejects_context_term(self):
+        self.assertFalse(
+            asr_server.context_term_has_unprompted_support("Claude", "blorp")
+        )
+        self.assertFalse(
+            asr_server.context_term_has_unprompted_support("Claude", "")
+        )
+
+    def test_canonicalizes_split_tooltips_and_lora_spelling(self):
+        context = "Claude\nLoRA\ntooltips"
+        self.assertEqual(
+            asr_server.canonicalize_context_variants(
+                "Open the two tips panel",
+                context,
+            ),
+            "Open the tooltips panel",
+        )
+        self.assertEqual(
+            asr_server.canonicalize_context_variants("Testing Laura", context),
+            "Testing LoRA",
+        )
+
+    def test_does_not_join_unrelated_words_or_short_context_terms(self):
+        self.assertEqual(
+            asr_server.canonicalize_context_variants(
+                "Here are two useful tips for PR",
+                "tooltips\nPR",
+            ),
+            "Here are two useful tips for PR",
+        )
+
+    def test_verification_canonicalizes_split_tooltips_without_extra_decode(self):
+        server = self.make_server("unused")
+
+        result, mode = server._verify_context_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\ntooltips",
+            asr_server.DecodeResult("Show two tips", "English"),
+        )
+
+        self.assertEqual(result.text, "Show tooltips")
+        self.assertEqual(mode, "context-variant-canonicalized")
+        self.assertEqual(server.session.calls, [])
+
+    def test_split_unprompted_result_supports_prompted_tooltips(self):
+        server = self.make_server("Show two tips")
+
+        result, mode = server._verify_context_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\ntooltips",
+            asr_server.DecodeResult("Show tooltips", "English"),
+        )
+
+        self.assertEqual(result.text, "Show tooltips")
+        self.assertEqual(mode, "context-check-supported")
+        self.assertEqual(server.session.calls, [{}])
+
+    def test_verification_keeps_acoustically_supported_term(self):
+        server = self.make_server("Cloud")
+        original = asr_server.DecodeResult("Claude", "English")
+
+        result, mode = server._verify_context_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\nCodex",
+            original,
+        )
+
+        self.assertEqual(result, original)
+        self.assertEqual(mode, "context-check-supported")
+        self.assertEqual(server.session.calls, [{}])
+
+    def test_verification_restores_saved_context_casing(self):
+        server = self.make_server("Lora")
+
+        result, mode = server._verify_context_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\nLoRA",
+            asr_server.DecodeResult("LORA", "English"),
+        )
+
+        self.assertEqual(result.text, "LoRA")
+        self.assertEqual(mode, "context-check-supported")
+
+    def test_verification_redirects_wrong_context_term_to_supported_term(self):
+        server = self.make_server("Laura")
+
+        result, mode = server._verify_context_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\nLoRA",
+            asr_server.DecodeResult("Claude", "English"),
+        )
+
+        self.assertEqual(result.text, "LoRA")
+        self.assertEqual(mode, "context-check-redirected")
+
+    def test_plain_final_spelling_canonicalizes_without_preview_dependency(self):
+        server = self.make_server("unused")
+
+        result, mode = server._verify_context_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\nLoRA",
+            asr_server.DecodeResult("Testing Laura now", "English"),
+            "Testing Claude now",
+        )
+
+        self.assertEqual(result.text, "Testing LoRA now")
+        self.assertEqual(mode, "context-variant-canonicalized")
+        self.assertEqual(server.session.calls, [])
+
+    def test_live_preview_redirects_prompted_claude_to_lora(self):
+        class PromptAwareSession:
+            def __init__(self):
+                self.calls = []
+
+            def transcribe(self, _audio, **kwargs):
+                self.calls.append(kwargs)
+                text = "Testing Claude" if kwargs.get("context") else "Testing Laura"
+                return SimpleNamespace(text=text, language="English")
+
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = PromptAwareSession()
+        server.short_utterance_language = "Chinese"
+        server._utterance_short_language = "Chinese"
+
+        result = server._decode_preview_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\nLoRA",
+        )
+
+        self.assertEqual(result.text, "Testing LoRA")
+        self.assertEqual(
+            server.session.calls,
+            [{"context": "Claude\nLoRA"}, {}],
+        )
+
+    def test_verification_uses_unprompted_result_for_unrelated_audio(self):
+        server = self.make_server("blorp")
+
+        result, mode = server._verify_context_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\nCodex",
+            asr_server.DecodeResult("Claude", "English"),
+        )
+
+        self.assertEqual(result.text, "blorp")
+        self.assertEqual(mode, "context-check-fallback")
+        self.assertEqual(server.session.calls, [{}])
+
+    def test_ordinary_transcript_does_not_add_decode(self):
+        server = self.make_server("unused")
+        original = asr_server.DecodeResult("I use a model", "English")
+
+        result, mode = server._verify_context_result(
+            np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+            "Claude\nCodex",
+            original,
+        )
+
+        self.assertEqual(result, original)
+        self.assertIsNone(mode)
+        self.assertEqual(server.session.calls, [])
+
+    def test_failed_verification_preserves_prompted_result(self):
+        server = self.make_server("unused")
+        server.session.transcribe = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("decoder unavailable")
+        )
+        original = asr_server.DecodeResult("Claude", "English")
+
+        with patch("sys.stderr"):
+            result, mode = server._verify_context_result(
+                np.zeros(asr_server.SAMPLE_RATE, dtype=np.float32),
+                "Claude\nCodex",
+                original,
+            )
+
+        self.assertEqual(result, original)
+        self.assertEqual(mode, "context-check-error")
+
+    def test_stop_verifies_fresh_final_before_emitting(self):
+        class PromptAwareSession:
+            def __init__(self):
+                self.calls = []
+
+            def transcribe(self, _audio, **kwargs):
+                self.calls.append(kwargs)
+                text = "Claude" if kwargs.get("context") else "blorp"
+                return SimpleNamespace(text=text, language="English")
+
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = PromptAwareSession()
+        server.lock = threading.Lock()
+        samples = np.arange(asr_server.SAMPLE_RATE, dtype=np.float32)
+        server.buf = 0.04 * np.sin(
+            2 * np.pi * 180 * samples / asr_server.SAMPLE_RATE
+        )
+        server.context = "Claude\nCodex"
+        server._context_revision = 0
+        server._thread = None
+        server._preview_stop = threading.Event()
+        server.active = True
+        server.short_utterance_language = None
+        server._utterance_short_language = None
+        server._last_preview_text = None
+        server._last_preview_len = 0
+        server._last_preview_start = 0
+        server._last_preview_context_revision = -1
+        server._last_preview_language = None
+        server._last_preview_detected_language = None
+        server._last_preview_stable = False
+
+        with patch.object(asr_server, "emit") as emitted:
+            server.stop()
+
+        final = emitted.call_args.args[0]
+        self.assertEqual(final["text"], "blorp")
+        self.assertEqual(final["mode"], "fresh-final-context-check-fallback")
+        self.assertEqual(
+            server.session.calls,
+            [{"context": "Claude\nCodex"}, {}],
+        )
+
+    def test_stop_recovers_lora_when_final_flips_from_correct_preview(self):
+        class PromptAwareSession:
+            def __init__(self):
+                self.calls = []
+
+            def transcribe(self, _audio, **kwargs):
+                self.calls.append(kwargs)
+                text = "Testing Claude" if kwargs.get("context") else "Testing Laura"
+                return SimpleNamespace(text=text, language="English")
+
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = PromptAwareSession()
+        server.lock = threading.Lock()
+        samples = np.arange(asr_server.SAMPLE_RATE, dtype=np.float32)
+        server.buf = 0.04 * np.sin(
+            2 * np.pi * 180 * samples / asr_server.SAMPLE_RATE
+        )
+        server.context = "Claude\nLoRA"
+        server._context_revision = 3
+        server._thread = None
+        server._preview_stop = threading.Event()
+        server.active = True
+        server.short_utterance_language = None
+        server._utterance_short_language = None
+        server._last_preview_text = "Testing LoRA"
+        server._last_preview_len = int(0.8 * asr_server.SAMPLE_RATE)
+        server._last_preview_start = 0
+        server._last_preview_context_revision = 3
+        server._last_preview_language = None
+        server._last_preview_detected_language = "English"
+        server._last_preview_stable = True
+
+        with patch.object(asr_server, "emit") as emitted:
+            server.stop()
+
+        final = emitted.call_args.args[0]
+        self.assertEqual(final["text"], "Testing LoRA")
+        self.assertEqual(
+            final["mode"],
+            "fresh-final-context-check-redirected",
+        )
+        self.assertEqual(
+            server.session.calls,
+            [{"context": "Claude\nLoRA"}, {}],
+        )
+
+    def test_stop_canonicalizes_lora_without_an_extra_decode(self):
+        class FinalSession:
+            def __init__(self):
+                self.calls = []
+
+            def transcribe(self, _audio, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(text="Testing Laura", language="English")
+
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = FinalSession()
+        server.lock = threading.Lock()
+        samples = np.arange(asr_server.SAMPLE_RATE, dtype=np.float32)
+        server.buf = 0.04 * np.sin(
+            2 * np.pi * 180 * samples / asr_server.SAMPLE_RATE
+        )
+        server.context = "Claude\nLoRA"
+        server._context_revision = 4
+        server._thread = None
+        server._preview_stop = threading.Event()
+        server.active = True
+        server.short_utterance_language = None
+        server._utterance_short_language = None
+        server._last_preview_text = None
+        server._last_preview_len = 0
+        server._last_preview_start = 0
+        server._last_preview_context_revision = -1
+        server._last_preview_language = None
+        server._last_preview_detected_language = None
+        server._last_preview_stable = False
+        server._last_context_preview_text = "Testing LoRA"
+        server._last_context_preview_len = len(server.buf)
+        server._last_context_preview_start = 0
+        server._last_context_preview_revision = 4
+
+        with patch.object(asr_server, "emit") as emitted:
+            server.stop()
+
+        final = emitted.call_args.args[0]
+        self.assertEqual(final["text"], "Testing LoRA")
+        self.assertEqual(
+            final["mode"],
+            "fresh-final-context-variant-canonicalized",
+        )
+        self.assertEqual(server.session.calls, [{"context": "Claude\nLoRA"}])
+
+    def test_stop_does_not_emit_suspicious_reusable_preview_early(self):
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = self.FakeSession("blorp")
+        server.lock = threading.Lock()
+        samples = np.arange(asr_server.SAMPLE_RATE, dtype=np.float32)
+        server.buf = 0.04 * np.sin(
+            2 * np.pi * 180 * samples / asr_server.SAMPLE_RATE
+        )
+        server.context = "Claude\nCodex"
+        server._context_revision = 2
+        server._thread = None
+        server._preview_stop = threading.Event()
+        server.active = True
+        server.short_utterance_language = None
+        server._utterance_short_language = None
+        server._last_preview_text = "Claude"
+        server._last_preview_len = len(server.buf)
+        server._last_preview_start = 0
+        server._last_preview_context_revision = 2
+        server._last_preview_language = None
+        server._last_preview_detected_language = "English"
+        server._last_preview_stable = True
+
+        with patch.object(asr_server, "emit") as emitted:
+            server.stop()
+
+        final = emitted.call_args.args[0]
+        self.assertEqual(final["text"], "blorp")
+        self.assertEqual(
+            final["mode"],
+            "reuse-exact-context-check-fallback",
+        )
+        self.assertEqual(server.session.calls, [{}])
+
+
 class PreviewSchedulingTests(unittest.TestCase):
     def test_short_utterances_keep_original_cadence(self):
         self.assertEqual(
@@ -152,6 +559,9 @@ class ShortUtteranceLanguageTests(unittest.TestCase):
         self.assertIsNone(
             asr_server.normalize_short_utterance_language("automatic")
         )
+        self.assertIsNone(
+            asr_server.normalize_short_utterance_language("Automatic multilingual")
+        )
 
     def test_all_official_languages_are_available(self):
         self.assertEqual(len(asr_server.SUPPORTED_SHORT_UTTERANCE_LANGUAGES), 30)
@@ -208,6 +618,146 @@ class ShortUtteranceLanguageTests(unittest.TestCase):
         self.assertEqual(server.session.calls, [{"language": "Chinese"}])
 
 
+class ShortPhraseLanguageRepairTests(unittest.TestCase):
+    def test_partial_english_translation_selects_english_retry(self):
+        self.assertEqual(
+            asr_server.language_repair_target(
+                "让我 take a look",
+                "English",
+                2.7,
+            ),
+            "English",
+        )
+
+    def test_partial_chinese_translation_selects_chinese_retry(self):
+        self.assertEqual(
+            asr_server.language_repair_target(
+                "Let me 看一下",
+                "Chinese",
+                2.7,
+            ),
+            "Chinese",
+        )
+
+    def test_primary_language_disagreement_preserves_code_switch(self):
+        self.assertIsNone(
+            asr_server.language_repair_target(
+                "让我 take a look",
+                "Chinese",
+                2.7,
+            )
+        )
+
+    def test_long_or_single_script_transcripts_are_not_repaired(self):
+        self.assertIsNone(
+            asr_server.language_repair_target(
+                "让我 take a look",
+                "English",
+                asr_server.LANGUAGE_REPAIR_MAX_SEC + 0.01,
+            )
+        )
+        self.assertIsNone(
+            asr_server.language_repair_target(
+                "let me take a look",
+                "English",
+                2.7,
+            )
+        )
+
+    def test_repair_must_remove_conflicting_script_without_collapsing(self):
+        self.assertTrue(
+            asr_server.is_better_language_repair(
+                "让我 take a look",
+                "Let me take a look",
+                "English",
+            )
+        )
+        self.assertFalse(
+            asr_server.is_better_language_repair(
+                "让我 take a look",
+                "look",
+                "English",
+            )
+        )
+
+    def test_server_retries_with_detected_dominant_language(self):
+        class FakeSession:
+            def __init__(self):
+                self.calls = []
+
+            def transcribe(self, _audio, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs.get("language") == "English":
+                    return SimpleNamespace(
+                        text="Let me take a look",
+                        language="English",
+                    )
+                return SimpleNamespace(
+                    text="让我 take a look",
+                    language="English",
+                )
+
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = FakeSession()
+        audio = np.zeros(int(2.7 * asr_server.SAMPLE_RATE), dtype=np.float32)
+        original = server._decode_result(audio, "")
+
+        repaired, target = server._repair_short_language(audio, "", original)
+
+        self.assertEqual(target, "English")
+        self.assertEqual(repaired.text, "Let me take a look")
+        self.assertEqual(
+            server.session.calls,
+            [{}, {"language": "English"}],
+        )
+
+    def test_stop_repairs_reusable_preview_and_reports_language(self):
+        class FakeSession:
+            def transcribe(self, _audio, **kwargs):
+                self.last_call = kwargs
+                return SimpleNamespace(
+                    text="Let me take a look",
+                    language="English",
+                )
+
+        server = asr_server.Server.__new__(asr_server.Server)
+        server.session = FakeSession()
+        server.lock = threading.Lock()
+        samples = np.arange(
+            int(2.7 * asr_server.SAMPLE_RATE),
+            dtype=np.float32,
+        )
+        server.buf = 0.04 * np.sin(
+            2 * np.pi * 180 * samples / asr_server.SAMPLE_RATE
+        )
+        server.context = ""
+        server._context_revision = 0
+        server._thread = None
+        server._preview_stop = threading.Event()
+        server.active = True
+        server.short_utterance_language = None
+        server._utterance_short_language = None
+        server._last_preview_text = "让我 take a look"
+        server._last_preview_len = len(server.buf)
+        server._last_preview_start = 0
+        server._last_preview_context_revision = 0
+        server._last_preview_language = None
+        server._last_preview_detected_language = "English"
+        server._last_preview_stable = True
+
+        with patch.object(asr_server, "emit") as emitted:
+            server.stop()
+
+        final = emitted.call_args.args[0]
+        self.assertEqual(final["text"], "Let me take a look")
+        self.assertEqual(
+            final["mode"],
+            "reuse-exact-language-repair-english",
+        )
+        self.assertEqual(final["language"], "English")
+        self.assertEqual(server.session.last_call, {"language": "English"})
+
+
 class PreviewReuseTests(unittest.TestCase):
     def make_server(self, text="hello", decoded_len=3200, revision=2, stable=True):
         server = asr_server.Server.__new__(asr_server.Server)
@@ -225,14 +775,17 @@ class PreviewReuseTests(unittest.TestCase):
     def test_exact_buffer_is_reused(self):
         server = self.make_server()
         audio = np.zeros(3200, dtype=np.float32)
-        self.assertEqual(server._reusable_preview(audio, 2), ("hello", "reuse-exact", 0))
+        self.assertEqual(
+            server._reusable_preview(audio, 2),
+            ("hello", "reuse-exact", 0, None),
+        )
 
     def test_stable_preview_with_silent_tail_is_reused(self):
         server = self.make_server()
         audio = np.zeros(4000, dtype=np.float32)
         self.assertEqual(
             server._reusable_preview(audio, 2),
-            ("hello", "reuse-silent-tail", 800),
+            ("hello", "reuse-silent-tail", 800, None),
         )
 
     def test_stable_preview_remains_reusable_across_adaptive_cooldown(self):
@@ -241,7 +794,7 @@ class PreviewReuseTests(unittest.TestCase):
         audio = np.zeros(3200 + tail, dtype=np.float32)
         self.assertEqual(
             server._reusable_preview(audio, 2),
-            ("hello", "reuse-silent-tail", tail),
+            ("hello", "reuse-silent-tail", tail, None),
         )
 
     def test_silent_tail_beyond_adaptive_headroom_falls_back(self):
@@ -280,7 +833,7 @@ class PreviewReuseTests(unittest.TestCase):
 
         self.assertEqual(
             server._reusable_preview(audio, 2),
-            ("hello", "reuse-exact", 0),
+            ("hello", "reuse-exact", 0, None),
         )
 
     def test_rolling_window_preview_is_never_reused_as_full_final(self):

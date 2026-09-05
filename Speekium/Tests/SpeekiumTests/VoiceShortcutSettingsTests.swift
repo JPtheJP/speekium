@@ -35,67 +35,42 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         XCTAssertEqual(reloaded.asrContext, "Claude\nGitHub\nhaha github")
     }
 
-    func testContextAwareCapitalizationDefaultsOn() {
-        XCTAssertTrue(Settings(defaults: makeDefaults()).contextAwareCapitalization)
+    func testContextAwareCapitalizationDefaultsOff() {
+        XCTAssertFalse(Settings(defaults: makeDefaults()).contextAwareCapitalization)
     }
 
-    func testOneWordDictationOffersEveryQwenLanguagePlusTwoSmartModes() {
+    func testPlaySoundDefaultsOn() {
+        XCTAssertTrue(Settings(defaults: makeDefaults()).playSound)
+    }
+
+    func testOneWordDictationOffersAutomaticAndEveryQwenLanguage() {
         let fixedLanguages = ShortUtteranceLanguage.allCases.compactMap(\.fixedModelLanguage)
-        let smartModes = ShortUtteranceLanguage.allCases.filter { $0.fixedModelLanguage == nil }
 
-        XCTAssertEqual(ShortUtteranceLanguage.allCases.count, 32)
+        XCTAssertEqual(ShortUtteranceLanguage.allCases.count, 31)
         XCTAssertEqual(Set(fixedLanguages).count, 30)
-        XCTAssertEqual(smartModes, [.smartAutomatic, .smartEnglishChinese])
+        XCTAssertEqual(
+            ShortUtteranceLanguage.automaticMultilingual.modelName,
+            "Automatic multilingual"
+        )
     }
 
-    func testOneWordDictationDefaultsToSmartAutomatic() {
-        // The safe default for multilingual speakers: never forces a wrong language.
+    func testOneWordDictationDefaultsToAutomaticMultilingual() {
         XCTAssertEqual(
             Settings(defaults: makeDefaults()).shortUtteranceLanguage,
-            .smartAutomatic
+            .automaticMultilingual
         )
     }
 
-    func testSmartOneWordLanguageUsesNearestCursorScript() {
-        XCTAssertEqual(
-            ShortUtteranceLanguageResolver.modelLanguage(
-                for: .smartEnglishChinese,
-                precedingText: "Please enter 你好：",
-                inputSourceLanguages: ["en"]
-            ),
-            "Chinese"
-        )
-        XCTAssertEqual(
-            ShortUtteranceLanguageResolver.modelLanguage(
-                for: .smartEnglishChinese,
-                precedingText: "这是 a test: ",
-                inputSourceLanguages: ["zh-Hans"]
-            ),
-            "English"
-        )
+    func testAutomaticShortDictationNeverForcesALanguage() {
+        XCTAssertNil(ShortUtteranceLanguageResolver.modelLanguage(
+            for: .automaticMultilingual
+        ))
     }
 
-    func testSmartOneWordLanguageFallsBackToKeyboardThenAutomatic() {
+    func testFixedShortDictationLanguageRemainsDeterministic() {
         XCTAssertEqual(
             ShortUtteranceLanguageResolver.modelLanguage(
-                for: .smartEnglishChinese,
-                precedingText: nil,
-                inputSourceLanguages: ["zh-Hans"]
-            ),
-            "Chinese"
-        )
-        XCTAssertNil(
-            ShortUtteranceLanguageResolver.modelLanguage(
-                for: .smartEnglishChinese,
-                precedingText: nil,
-                inputSourceLanguages: ["ja"]
-            )
-        )
-        XCTAssertEqual(
-            ShortUtteranceLanguageResolver.modelLanguage(
-                for: .french,
-                precedingText: "中文",
-                inputSourceLanguages: ["zh-Hans"]
+                for: .french
             ),
             "French"
         )
@@ -121,25 +96,82 @@ final class VoiceShortcutSettingsTests: XCTestCase {
 
     func testDeveloperFirstRunSimulationOffersFirstDictationCoach() {
         XCTAssertTrue(FirstDictationCoachPolicy.shouldOffer(
-            hasCompletedOnboarding: true,
+            needsFirstDictationCoach: false,
             isDeveloperFirstRunSimulation: true
         ))
         XCTAssertTrue(FirstDictationCoachPolicy.shouldOffer(
-            hasCompletedOnboarding: false,
+            needsFirstDictationCoach: true,
             isDeveloperFirstRunSimulation: false
         ))
         XCTAssertFalse(FirstDictationCoachPolicy.shouldOffer(
-            hasCompletedOnboarding: true,
+            needsFirstDictationCoach: false,
             isDeveloperFirstRunSimulation: false
         ))
     }
 
-    func testLegacyAutomaticShortLanguageMigratesToSmartAutomatic() {
-        // A pre-smart "automatic" preference now has a true automatic mode to land on.
+    func testFirstDictationCoachWaitsForEveryRuntimePrerequisite() {
+        XCTAssertTrue(FirstDictationCoachPolicy.shouldPresent(
+            isQueued: true,
+            isSpeechEngineReady: true,
+            hasMicrophonePermission: true,
+            hasAccessibilityPermission: true
+        ))
+
+        for missing in 0..<4 {
+            var prerequisites = [true, true, true, true]
+            prerequisites[missing] = false
+            XCTAssertFalse(FirstDictationCoachPolicy.shouldPresent(
+                isQueued: prerequisites[0],
+                isSpeechEngineReady: prerequisites[1],
+                hasMicrophonePermission: prerequisites[2],
+                hasAccessibilityPermission: prerequisites[3]
+            ))
+        }
+    }
+
+    func testNewInstallPersistsPendingFirstDictationCoachUntilHandled() {
+        let defaults = makeDefaults()
+        var settings = Settings(defaults: defaults)
+
+        XCTAssertFalse(settings.hasCompletedOnboarding)
+        XCTAssertTrue(settings.needsFirstDictationCoach)
+
+        settings.hasCompletedOnboarding = true
+        settings = Settings(defaults: defaults)
+        XCTAssertTrue(settings.needsFirstDictationCoach)
+
+        settings.needsFirstDictationCoach = false
+        XCTAssertFalse(Settings(defaults: defaults).needsFirstDictationCoach)
+    }
+
+    func testExistingOnboardedUserDoesNotReceiveMigratedFirstRunCoach() {
+        let defaults = makeDefaults()
+        defaults.set(true, forKey: "hasCompletedOnboarding")
+
+        let settings = Settings(defaults: defaults)
+
+        XCTAssertFalse(settings.needsFirstDictationCoach)
+        XCTAssertEqual(defaults.object(forKey: "needsFirstDictationCoach") as? Bool, false)
+    }
+
+    func testLegacyAutomaticShortLanguageMigratesToAutomaticMultilingual() {
         let defaults = makeDefaults()
         defaults.set("automatic", forKey: "shortUtteranceLanguage")
 
-        XCTAssertEqual(Settings(defaults: defaults).shortUtteranceLanguage, .smartAutomatic)
+        XCTAssertEqual(
+            Settings(defaults: defaults).shortUtteranceLanguage,
+            .automaticMultilingual
+        )
+    }
+
+    func testLegacySmartBilingualMigratesToAutomaticMultilingual() {
+        let defaults = makeDefaults()
+        defaults.set("smartEnglishChinese", forKey: "shortUtteranceLanguage")
+
+        XCTAssertEqual(
+            Settings(defaults: defaults).shortUtteranceLanguage,
+            .automaticMultilingual
+        )
     }
 
     func testContextDeduplicatesIdenticalLiteralLinesAndNeverIncludesReplacement() throws {
@@ -194,5 +226,20 @@ final class VoiceShortcutSettingsTests: XCTestCase {
         defaults.set(Data([0x01, 0x02, 0x03]), forKey: "voiceShortcuts.v1")
         let settings = Settings(defaults: defaults)
         XCTAssertTrue(settings.voiceShortcuts.isEmpty)
+    }
+
+    func testMalformedVocabularyStorageIsNotOverwrittenDuringInitialization() {
+        let defaults = makeDefaults()
+        let malformed = ["unexpected": true]
+        defaults.set(malformed, forKey: "vocabularyEntries")
+        defaults.set("Legacy term", forKey: "contextTerms")
+
+        let settings = Settings(defaults: defaults)
+
+        XCTAssertTrue(settings.vocabularyEntries.isEmpty)
+        XCTAssertEqual(
+            defaults.dictionary(forKey: "vocabularyEntries") as? [String: Bool],
+            malformed
+        )
     }
 }

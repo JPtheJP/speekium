@@ -30,6 +30,7 @@ final class ASRService {
         python: URL,
         script: URL,
         model: String,
+        engine: ASREngine = .qwen3,
         bits: Int,
         context: String,
         shortUtteranceLanguage: ShortUtteranceLanguage
@@ -47,9 +48,11 @@ final class ASRService {
 
         process.environment = PythonProcessEnvironment.sanitized(additions: [
             "SPEEKIUM_MODEL": model,
+            "SPEEKIUM_ENGINE": engine.rawValue,
             "SPEEKIUM_BITS": String(bits),
             "SPEEKIUM_CONTEXT": context,
-            "SPEEKIUM_SHORT_UTTERANCE_LANGUAGE": shortUtteranceLanguage.modelName,
+            "SPEEKIUM_SHORT_UTTERANCE_LANGUAGE":
+                shortUtteranceLanguage.fixedModelLanguage ?? "",
         ])
     }
 
@@ -104,10 +107,11 @@ final class ASRService {
                 let waitMS = obj["wait_ms"] as? Int ?? 0
                 let mode = obj["mode"] as? String ?? "legacy"
                 let unseenMS = obj["unseen_ms"] as? Int ?? 0
+                let language = obj["language"] as? String ?? "unknown"
                 Log.write(
                     "asr final: audio=\(String(format: "%.2f", seconds))s "
                     + "visible=\(totalMS)ms wait=\(waitMS)ms inference=\(inferenceMS)ms "
-                    + "mode=\(mode) unseen=\(unseenMS)ms"
+                    + "mode=\(mode) unseen=\(unseenMS)ms language=\(language)"
                 )
                 event = .final(
                     text: obj["text"] as? String ?? "",

@@ -1,0 +1,3 @@
+# mlx-whisper is isolated so its conversion-only PyTorch dependency is not
+# resolved into the release runtime.
+mlx-whisper==0.4.3 --hash=sha256:6b82b6597a994643a3e5496c7bc229a672e5ca308458455bfe276e76ae024489

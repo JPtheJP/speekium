@@ -36,8 +36,8 @@ echo "▸ creating virtual environment at $VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
 echo "▸ installing Apple Silicon ASR dependencies"
 "$VENV/bin/python" -m pip install -r requirements-macos-arm64.txt
+"$VENV/bin/python" -m pip install --no-deps -r requirements-macos-arm64-nodeps.txt
 
 echo "✓ setup complete"
 echo "  next: ./Speekium/build.sh"
 echo "  then: open Speekium.app"
-

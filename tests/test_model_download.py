@@ -12,12 +12,13 @@ SPEC.loader.exec_module(model_download)
 
 
 class FakeAPI:
-    def __init__(self, siblings):
+    def __init__(self, siblings, config=None):
         self.siblings = siblings
+        self.config = config
 
     def model_info(self, repo_id, files_metadata=True):
         assert files_metadata is True
-        return SimpleNamespace(siblings=self.siblings)
+        return SimpleNamespace(siblings=self.siblings, config=self.config)
 
 
 def fake_usage(free):
@@ -53,7 +54,10 @@ def test_preflight_sums_only_download_patterns(tmp_path):
 
 
 def test_preflight_exposes_capacity_failure_without_downloading(tmp_path):
-    api = FakeAPI([SimpleNamespace(rfilename="model.safetensors", size=1_000)])
+    api = FakeAPI([
+        SimpleNamespace(rfilename="config.json", size=10),
+        SimpleNamespace(rfilename="model.safetensors", size=1_000),
+    ])
     result = model_download.preflight(
         "Qwen/Qwen3-ASR-0.6B",
         api=api,
@@ -62,6 +66,72 @@ def test_preflight_exposes_capacity_failure_without_downloading(tmp_path):
     )
 
     assert result["availableBytes"] < result["requiredBytes"]
+
+
+def test_whisper_preflight_accepts_mlx_weights_and_excludes_readme(tmp_path):
+    api = FakeAPI([
+        SimpleNamespace(rfilename="config.json", size=10),
+        SimpleNamespace(rfilename="weights.npz", size=1_000),
+        SimpleNamespace(rfilename="README.md", size=50_000),
+    ])
+
+    result = model_download.preflight(
+        "mlx-community/whisper-small-mlx",
+        engine="whisper",
+        api=api,
+        cache_root=tmp_path,
+        usage=fake_usage(10**12),
+    )
+
+    assert result["totalBytes"] == 1_010
+
+
+def test_preflight_rejects_repository_for_wrong_engine(tmp_path):
+    whisper = FakeAPI([
+        SimpleNamespace(rfilename="config.json", size=10),
+        SimpleNamespace(rfilename="weights.npz", size=1_000),
+    ])
+
+    with pytest.raises(model_download.CompatibilityError, match="Qwen3-ASR"):
+        model_download.preflight(
+            "mlx-community/whisper-small-mlx",
+            engine="qwen3",
+            api=whisper,
+            cache_root=tmp_path,
+            usage=fake_usage(10**12),
+        )
+
+
+def test_preflight_rejects_mismatched_declared_architecture(tmp_path):
+    api = FakeAPI([
+        SimpleNamespace(rfilename="config.json", size=10),
+        SimpleNamespace(rfilename="model.safetensors", size=1_000),
+    ], config={"model_type": "whisper"})
+
+    with pytest.raises(model_download.CompatibilityError, match="model type"):
+        model_download.preflight(
+            "someone/not-qwen",
+            engine="qwen3",
+            api=api,
+            cache_root=tmp_path,
+            usage=fake_usage(10**12),
+        )
+
+
+def test_preflight_rejects_required_files_nested_below_repository_root(tmp_path):
+    api = FakeAPI([
+        SimpleNamespace(rfilename="converted/config.json", size=10),
+        SimpleNamespace(rfilename="converted/weights.npz", size=1_000),
+    ])
+
+    with pytest.raises(model_download.CompatibilityError, match="config.json"):
+        model_download.preflight(
+            "someone/nested-whisper",
+            engine="whisper",
+            api=api,
+            cache_root=tmp_path,
+            usage=fake_usage(10**12),
+        )
 
 
 def test_custom_cache_environment_is_resolved(monkeypatch, tmp_path):

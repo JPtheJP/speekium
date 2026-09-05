@@ -22,16 +22,18 @@ arbitrary-code-execution vector into a Microphone- and Accessibility-privileged 
 | # | Severity | Status | Finding |
 |---|----------|--------|---------|
 | F1 | **Medium** | ✅ Fixed | `SPEEKIUM_PYTHON` / `SPEEKIUM_RUNTIME_DIRECTORY` overrides honored in release builds → arbitrary sidecar executable |
-| F2 | Low | ✅ Fixed | Update check opens an unvalidated URL scheme from a network response |
+| F2 | Low | ✅ Fixed (superseded by upstream 1.0.2 `isSecureGitHubURL`) | Update check opens an unvalidated URL scheme from a network response |
 | F3 | Low | ✅ Fixed | Log file is world-readable (0644) and holds app/usage metadata |
 | F4 | Low | Open | Transcript pasteboard + synthetic Cmd-C/Cmd-V is the app's largest privacy surface (by design) |
 | F5 | Info | Open | Python health-check program assembled by string interpolation |
-| F6 | Info | Open | `codesign --deep` in `build.sh` (deprecated) |
+| F6 | Info | ✅ Fixed (upstream 1.0.2 dropped `--deep`) | `codesign --deep` in `build.sh` (deprecated) |
 | F7 | Info | Open | Root-level Python prototypes live alongside shipped code |
 
 **F1–F3 were fixed** in the commit that follows this review; see the resolution notes
 on each finding and the regression coverage in
 [`SecurityHardeningTests.swift`](Speekium/Tests/SpeekiumTests/SecurityHardeningTests.swift).
+
+**Upstream 1.0.2 merge (2026-09-05).** Upstream independently addressed several items: F1's env-override gating now also exists upstream (`isDevelopmentBuild`, additionally compile-time-disabled via `#if SPEEKIUM_RELEASE`; our `RuntimeEnvironment` remains for the sidecar model/engine/bits reads), F2 is superseded by upstream's `isSecureGitHubURL` in the new signed auto-updater (our `isTrustedReleaseURL` was dropped), F6 is resolved (upstream no longer signs with `--deep`), and the supply-chain note is addressed by hash-locked `requirements-*.lock` files. F3 (0600 log) and F4/F5/F7 are unchanged.
 
 ---
 

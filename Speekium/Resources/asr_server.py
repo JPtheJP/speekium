@@ -20,11 +20,15 @@ prefix stable once two consecutive passes agree.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
+from difflib import SequenceMatcher
 import json
 import os
+import re
 import sys
 import threading
 import time
+import unicodedata
 
 import numpy as np
 
@@ -72,6 +76,42 @@ PREVIEW_MAX_AUDIO_SEC = 12.0
 WINDOWED_PREVIEW_COOLDOWN_RATIO = 0.75
 WINDOWED_PREVIEW_MAX_COOLDOWN_SEC = 0.4
 
+# Qwen occasionally translates only the opening of a short monolingual phrase,
+# for example spoken English "let me take a look" becoming
+# "让我 take a look". The model already emits a primary audio language before
+# its transcript. For a small mixed-script result whose dominant script agrees
+# with that detected language, retry once with the same language fixed. The
+# candidate is accepted only if it removes conflicting script without collapsing
+# or expanding the phrase. Longer and genuinely ambiguous mixed speech stays on
+# the normal multilingual path.
+LANGUAGE_REPAIR_MAX_SEC = 4.0
+LANGUAGE_REPAIR_MAX_UNITS = 8
+LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)*")
+ASCII_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)*")
+
+# Context is a strong generative hint rather than a constrained hotword list.
+# On acoustically unfamiliar one-word clips, Qwen can emit one context line
+# verbatim (often the first one) even when the speaker said something unrelated.
+# Only that narrow result shape receives an unprompted verification pass.
+CONTEXT_SUPPORT_MIN_SIMILARITY = 2 / 3
+CONTEXT_PREVIEW_MAX_UNSEEN_SEC = 1.0
+CONTEXT_SPLIT_MIN_SIMILARITY = 0.75
+CONTEXT_SPLIT_MAX_WORDS = 3
+CONTEXT_SPLIT_MIN_TERM_LENGTH = 5
+
+
+@dataclass(frozen=True)
+class DecodeResult:
+    text: str
+    language: str | None
+
+
+@dataclass(frozen=True)
+class TextToken:
+    text: str
+    start: int
+    end: int
+
 
 def emit(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -84,6 +124,440 @@ def commonprefix(a: str, b: str) -> str:
     while i < n and a[i] == b[i]:
         i += 1
     return a[:i]
+
+
+def normalize_detected_language(value: object) -> str | None:
+    """Return the canonical language names used by short-phrase repair."""
+    normalized = str(value or "").strip().casefold().replace("_", "-")
+    if normalized in {"english", "en"} or normalized.startswith("en-"):
+        return "English"
+    if normalized in {"chinese", "zh"} or normalized.startswith("zh-"):
+        return "Chinese"
+    return str(value).strip() if value else None
+
+
+def is_han_character(character: str) -> bool:
+    value = ord(character)
+    return (
+        0x3400 <= value <= 0x4DBF
+        or 0x4E00 <= value <= 0x9FFF
+        or 0xF900 <= value <= 0xFAFF
+        or 0x20000 <= value <= 0x3134F
+    )
+
+
+def transcript_script_units(text: str) -> tuple[int, int]:
+    """Return (Han characters, Latin words) for a bilingual transcript."""
+    han_characters = sum(1 for character in text if is_han_character(character))
+    latin_words = len(LATIN_WORD_RE.findall(text))
+    return han_characters, latin_words
+
+
+def normalized_context_text(text: str) -> str:
+    """Return a punctuation/spacing-insensitive form for context checks."""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+def comparable_context_terms(context: str) -> list[str]:
+    """Return context lines that are safe to compare by Latin edit distance."""
+    return [
+        term
+        for line in context.splitlines()
+        if (
+            (term := line.strip())
+            and term.isascii()
+            and LATIN_WORD_RE.search(term)
+        )
+    ]
+
+
+def text_tokens(text: str) -> list[TextToken]:
+    """Return ASCII word tokens with source ranges for surgical replacement."""
+    return [
+        TextToken(match.group(), match.start(), match.end())
+        for match in ASCII_WORD_RE.finditer(text)
+    ]
+
+
+def single_word_context_terms(context: str) -> list[str]:
+    """Return comparable context entries represented by exactly one word."""
+    return [
+        term
+        for term in comparable_context_terms(context)
+        if len(text_tokens(term)) == 1
+    ]
+
+
+def transcript_contains_context_word(transcript: str, context: str) -> bool:
+    """Return True when any complete transcript word is a context entry."""
+    terms = {
+        normalized_context_text(term)
+        for term in single_word_context_terms(context)
+    }
+    return any(
+        normalized_context_text(token.text) in terms
+        for token in text_tokens(transcript)
+    )
+
+
+def edit_distance(left: str, right: str) -> int:
+    """Return Levenshtein distance using one row of working memory."""
+    if len(left) < len(right):
+        left, right = right, left
+    previous = list(range(len(right) + 1))
+    for left_index, left_character in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_character in enumerate(right, start=1):
+            current.append(min(
+                current[-1] + 1,
+                previous[right_index] + 1,
+                previous[right_index - 1] + (left_character != right_character),
+            ))
+        previous = current
+    return previous[-1]
+
+
+def context_text_similarity(term: str, transcript: str) -> float:
+    """Return normalized edit similarity for one context term and transcript."""
+    expected = normalized_context_text(term)
+    observed = normalized_context_text(transcript)
+    if not expected or not observed:
+        return 0.0
+    return 1.0 - edit_distance(expected, observed) / max(
+        len(expected),
+        len(observed),
+    )
+
+
+def latin_consonant_skeleton(text: str) -> str:
+    """Return a small pronunciation hint for vowel-spelling variants."""
+    normalized = normalized_context_text(text)
+    return "".join(
+        character
+        for character in normalized
+        if character.isascii()
+        and (character.isdigit() or character not in "aeiouy")
+    )
+
+
+def context_support_score(term: str, transcript: str) -> float:
+    """Score spelling evidence, including variants such as LoRA/Laura."""
+    score = context_text_similarity(term, transcript)
+    expected_skeleton = latin_consonant_skeleton(term)
+    observed_skeleton = latin_consonant_skeleton(transcript)
+    if (
+        len(expected_skeleton) >= 2
+        and expected_skeleton == observed_skeleton
+    ):
+        return 1.0
+    return score
+
+
+def best_supported_term(
+    terms: list[str],
+    transcript: str,
+) -> tuple[str | None, float]:
+    """Return the best context spelling and its unprompted support score."""
+    best_term = None
+    best_score = 0.0
+    for term in terms:
+        score = context_support_score(term, transcript)
+        if score > best_score:
+            best_term = term
+            best_score = score
+    if best_score < CONTEXT_SUPPORT_MIN_SIMILARITY:
+        return None, best_score
+    return best_term, best_score
+
+
+def best_supported_context_term(context: str, transcript: str) -> str | None:
+    """Return the context spelling best supported by an unprompted decode."""
+    term, _score = best_supported_term(
+        comparable_context_terms(context),
+        transcript,
+    )
+    return term
+
+
+def context_term_has_unprompted_support(term: str, transcript: str) -> bool:
+    """Return True when an unprompted spelling is close to the context term."""
+    return (
+        context_support_score(term, transcript)
+        >= CONTEXT_SUPPORT_MIN_SIMILARITY
+    )
+
+
+def canonicalize_context_variants(transcript: str, context: str) -> str:
+    """Restore vocabulary spelling for strong one- or multi-token variants.
+
+    One-token variants must have identical normalized spelling or consonant
+    skeleton (``Laura`` -> ``LoRA``). Split variants use a conservative edit
+    threshold (``two tips`` -> ``tooltips``) and ignore short context terms.
+    """
+    terms = single_word_context_terms(context)
+    tokens = text_tokens(transcript)
+    if not terms or not tokens:
+        return transcript
+
+    replacements: list[tuple[int, int, str]] = []
+    token_index = 0
+    while token_index < len(tokens):
+        best: tuple[float, int, str] | None = None
+        max_width = min(CONTEXT_SPLIT_MAX_WORDS, len(tokens) - token_index)
+        for width in range(1, max_width + 1):
+            end_index = token_index + width
+            start = tokens[token_index].start
+            end = tokens[end_index - 1].end
+            observed = transcript[start:end]
+            for term in terms:
+                if width == 1:
+                    score = context_support_score(term, observed)
+                    supported = score == 1.0
+                else:
+                    if (
+                        len(normalized_context_text(term))
+                        < CONTEXT_SPLIT_MIN_TERM_LENGTH
+                    ):
+                        continue
+                    score = context_text_similarity(term, observed)
+                    supported = score >= CONTEXT_SPLIT_MIN_SIMILARITY
+                if supported and (best is None or (score, width) > best[:2]):
+                    best = (score, width, term)
+
+        if best is None:
+            token_index += 1
+            continue
+        _score, width, term = best
+        end_index = token_index + width
+        replacements.append((
+            tokens[token_index].start,
+            tokens[end_index - 1].end,
+            term,
+        ))
+        token_index = end_index
+
+    canonical = transcript
+    for start, end, replacement in reversed(replacements):
+        canonical = canonical[:start] + replacement + canonical[end:]
+    return canonical
+
+
+def reconcile_context_words(
+    prompted: str,
+    unprompted: str,
+    context: str,
+) -> tuple[str, str | None]:
+    """Resolve context-word disagreements while preserving surrounding text."""
+    terms = single_word_context_terms(context)
+    term_by_key = {
+        normalized_context_text(term): term
+        for term in terms
+    }
+    prompted_tokens = text_tokens(prompted)
+    unprompted_tokens = text_tokens(unprompted)
+    prompted_keys = [normalized_context_text(token.text) for token in prompted_tokens]
+    unprompted_keys = [normalized_context_text(token.text) for token in unprompted_tokens]
+    if not any(key in term_by_key for key in prompted_keys):
+        return prompted, None
+
+    replacements: list[tuple[int, int, str]] = []
+    statuses: list[str] = []
+    matcher = SequenceMatcher(
+        None,
+        prompted_keys,
+        unprompted_keys,
+        autojunk=False,
+    )
+    for tag, prompted_start, prompted_end, unbiased_start, unbiased_end in matcher.get_opcodes():
+        prompted_indices = range(prompted_start, prompted_end)
+        unbiased_indices = range(unbiased_start, unbiased_end)
+        if (
+            tag == "replace"
+            and len(prompted_indices) == 1
+            and len(unbiased_indices) > 1
+            and prompted_keys[prompted_start] in term_by_key
+        ):
+            # A vocabulary word can legitimately be split by the unbiased
+            # decode (``tooltips`` -> ``two tips``). Compare the complete
+            # replacement span before falling back to individual tokens.
+            observed = unprompted[
+                unprompted_tokens[unbiased_start].start:
+                unprompted_tokens[unbiased_end - 1].end
+            ]
+            prompted_key = prompted_keys[prompted_start]
+            supported_term, _score = best_supported_term(terms, observed)
+            if supported_term is None:
+                replacement = observed
+                status = "fallback"
+            elif normalized_context_text(supported_term) == prompted_key:
+                replacement = supported_term
+                status = "supported"
+            else:
+                replacement = supported_term
+                status = "redirected"
+            token = prompted_tokens[prompted_start]
+            replacements.append((token.start, token.end, replacement))
+            statuses.append(status)
+            continue
+        if tag in {"equal", "replace"} and len(prompted_indices) == len(unbiased_indices):
+            pairs = zip(prompted_indices, unbiased_indices)
+        elif tag == "replace":
+            pairs = []
+            for prompted_index in prompted_indices:
+                if prompted_keys[prompted_index] not in term_by_key:
+                    continue
+                best_index = None
+                best_score = 0.0
+                for unbiased_index in unbiased_indices:
+                    _term, score = best_supported_term(
+                        terms,
+                        unprompted_tokens[unbiased_index].text,
+                    )
+                    if score > best_score:
+                        best_index = unbiased_index
+                        best_score = score
+                if best_index is not None:
+                    pairs.append((prompted_index, best_index))
+        else:
+            pairs = []
+
+        for prompted_index, unbiased_index in pairs:
+            prompted_key = prompted_keys[prompted_index]
+            prompted_term = term_by_key.get(prompted_key)
+            if prompted_term is None:
+                continue
+            unbiased_word = unprompted_tokens[unbiased_index].text
+            supported_term, _score = best_supported_term(terms, unbiased_word)
+            if supported_term is None:
+                replacement = unbiased_word
+                status = "fallback"
+            elif normalized_context_text(supported_term) == prompted_key:
+                replacement = supported_term
+                status = "supported"
+            else:
+                replacement = supported_term
+                status = "redirected"
+            token = prompted_tokens[prompted_index]
+            replacements.append((token.start, token.end, replacement))
+            statuses.append(status)
+
+    if not replacements:
+        return prompted, "context-check-unresolved"
+
+    reconciled = prompted
+    for start, end, replacement in reversed(replacements):
+        reconciled = reconciled[:start] + replacement + reconciled[end:]
+    for status in ("redirected", "fallback", "supported"):
+        if status in statuses:
+            return reconciled, f"context-check-{status}"
+    return reconciled, "context-check-unresolved"
+
+
+def canonicalize_from_preview_context(
+    transcript: str,
+    preview: str,
+    context: str,
+) -> str:
+    """Apply canonical context spelling where a recent preview signaled it."""
+    terms = single_word_context_terms(context)
+    term_keys = {normalized_context_text(term) for term in terms}
+    preview_tokens = text_tokens(preview)
+    transcript_tokens = text_tokens(transcript)
+    if not preview_tokens or not transcript_tokens:
+        return transcript
+
+    preview_denominator = max(1, len(preview_tokens) - 1)
+    signal_positions = [
+        index / preview_denominator
+        for index, token in enumerate(preview_tokens)
+        if normalized_context_text(token.text) in term_keys
+    ]
+    if not signal_positions:
+        return transcript
+
+    transcript_denominator = max(1, len(transcript_tokens) - 1)
+    candidates: list[tuple[int, float, str]] = []
+    for index, token in enumerate(transcript_tokens):
+        term, score = best_supported_term(terms, token.text)
+        # Preview evidence is weaker than an unprompted verification pass, so
+        # require exact normalized spelling or an identical consonant skeleton.
+        if term is not None and score == 1.0:
+            candidates.append((index, index / transcript_denominator, term))
+
+    replacements: list[tuple[int, int, str]] = []
+    unused = list(candidates)
+    for signal_position in signal_positions:
+        if not unused:
+            break
+        candidate = min(unused, key=lambda item: abs(item[1] - signal_position))
+        unused.remove(candidate)
+        token = transcript_tokens[candidate[0]]
+        replacements.append((token.start, token.end, candidate[2]))
+
+    canonical = transcript
+    for start, end, replacement in reversed(replacements):
+        canonical = canonical[:start] + replacement + canonical[end:]
+    return canonical
+
+
+def language_repair_target(
+    text: str,
+    detected_language: str | None,
+    audio_seconds: float,
+) -> str | None:
+    """Choose a safe primary-language retry for a short mixed-script result.
+
+    Detection and script dominance must independently agree. A mismatch is
+    treated as intentional code-switching and left untouched.
+    """
+    if audio_seconds > LANGUAGE_REPAIR_MAX_SEC:
+        return None
+
+    language = normalize_detected_language(detected_language)
+    if language not in {"Chinese", "English"}:
+        return None
+
+    han_characters, latin_words = transcript_script_units(text)
+    total_units = han_characters + latin_words
+    if (
+        han_characters == 0
+        or latin_words == 0
+        or total_units > LANGUAGE_REPAIR_MAX_UNITS
+        or han_characters == latin_words
+    ):
+        return None
+
+    dominant = "Chinese" if han_characters > latin_words else "English"
+    return language if language == dominant else None
+
+
+def is_better_language_repair(
+    original: str,
+    candidate: str,
+    target_language: str,
+) -> bool:
+    """Accept only a same-sized candidate with less conflicting script."""
+    if not candidate.strip() or candidate.strip() == original.strip():
+        return False
+
+    original_han, original_latin = transcript_script_units(original)
+    candidate_han, candidate_latin = transcript_script_units(candidate)
+    original_units = original_han + original_latin
+    candidate_units = candidate_han + candidate_latin
+    if original_units == 0:
+        return False
+
+    minimum_units = max(1, (original_units + 1) // 2)
+    maximum_units = original_units * 2 + 2
+    if not minimum_units <= candidate_units <= maximum_units:
+        return False
+
+    if target_language == "English":
+        return candidate_latin > 0 and candidate_han < original_han
+    if target_language == "Chinese":
+        return candidate_han > 0 and candidate_latin < original_latin
+    return False
 
 
 def is_confident_silence(audio: np.ndarray) -> bool:
@@ -178,12 +652,13 @@ class Server:
         model_id: str,
         bits: int,
         context: str,
-        short_utterance_language: str = "English",
+        short_utterance_language: str = "",
+        engine: str = "qwen3",
     ):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from asr_engine import build_session
 
-        self.session, load_secs = build_session(model_id, bits)
+        self.session, load_secs = build_session(model_id, bits, engine=engine)
         emit({"type": "ready", "ms": int(load_secs * 1000)})
 
         self.lock = threading.Lock()
@@ -202,7 +677,12 @@ class Server:
         self._last_preview_start = 0
         self._last_preview_context_revision = -1
         self._last_preview_language: str | None = None
+        self._last_preview_detected_language: str | None = None
         self._last_preview_stable = False
+        self._last_context_preview_text: str | None = None
+        self._last_context_preview_len = 0
+        self._last_context_preview_start = 0
+        self._last_context_preview_revision = -1
         self._thread: threading.Thread | None = None
         self._preview_stop = threading.Event()
 
@@ -212,37 +692,185 @@ class Server:
             return self._utterance_short_language
         return None
 
+    def _decode_result(
+        self,
+        audio: np.ndarray,
+        context: str,
+        language: str | None = None,
+    ) -> DecodeResult:
+        kw = {"context": context} if context else {}
+        if language:
+            kw["language"] = language
+        raw_result = self.session.transcribe(audio, **kw)
+        detected_language = normalize_detected_language(
+            getattr(raw_result, "language", None)
+        )
+        return DecodeResult(
+            text=(raw_result.text or "").strip(),
+            language=detected_language or normalize_detected_language(language),
+        )
+
     def _decode(
         self,
         audio: np.ndarray,
         context: str,
         language: str | None = None,
     ) -> str:
-        kw = {"context": context} if context else {}
-        if language:
-            kw["language"] = language
-        return (self.session.transcribe(audio, **kw).text or "").strip()
+        return self._decode_result(audio, context, language).text
+
+    def _decode_preview_result(
+        self,
+        audio: np.ndarray,
+        context: str,
+    ) -> DecodeResult:
+        """Decode and verify vocabulary words before showing a live preview."""
+        result = self._decode_result(audio, context)
+        result, _status = self._verify_context_result(
+            audio,
+            context,
+            result,
+            force_automatic_language=True,
+        )
+        return result
 
     def _decode_preview(self, audio: np.ndarray, context: str) -> str:
         """Decode live text without treating a sentence start as one word."""
-        return self._decode(audio, context)
+        return self._decode_preview_result(audio, context).text
+
+    def _decode_final_result(
+        self,
+        audio: np.ndarray,
+        context: str,
+    ) -> DecodeResult:
+        """Apply explicit short-utterance guidance after clip length is known."""
+        return self._decode_result(audio, context, self._language_for_audio(audio))
 
     def _decode_final(self, audio: np.ndarray, context: str) -> str:
         """Apply short-utterance guidance only after clip length is known."""
-        return self._decode(audio, context, self._language_for_audio(audio))
+        return self._decode_final_result(audio, context).text
+
+    def _repair_short_language(
+        self,
+        audio: np.ndarray,
+        context: str,
+        result: DecodeResult,
+    ) -> tuple[DecodeResult, str | None]:
+        """Retry a suspicious short mixed result in its detected language."""
+        target = language_repair_target(
+            result.text,
+            result.language,
+            len(audio) / SAMPLE_RATE,
+        )
+        if target is None:
+            return result, None
+
+        candidate = self._decode_result(audio, context, target)
+        if is_better_language_repair(result.text, candidate.text, target):
+            return candidate, target
+        return result, None
+
+    def _verify_context_result(
+        self,
+        audio: np.ndarray,
+        context: str,
+        result: DecodeResult,
+        preview_context: str | None = None,
+        force_automatic_language: bool = False,
+    ) -> tuple[DecodeResult, str | None]:
+        """Verify generated context words against an unprompted decode.
+
+        A nearby spelling such as ``Cloud`` still supports ``Claude``. When an
+        embedded prompted word disagrees, only that aligned word is replaced;
+        the prompted sentence and punctuation stay intact.
+        """
+        if not transcript_contains_context_word(result.text, context):
+            canonical = canonicalize_context_variants(result.text, context)
+            if canonical != result.text:
+                return DecodeResult(
+                    canonical,
+                    result.language,
+                ), "context-variant-canonicalized"
+            if preview_context is None:
+                return result, None
+            canonical = canonicalize_from_preview_context(
+                result.text,
+                preview_context,
+                context,
+            )
+            if canonical == result.text:
+                return result, None
+            return DecodeResult(
+                canonical,
+                result.language,
+            ), "context-preview-canonicalized"
+
+        try:
+            unbiased = self._decode_result(
+                audio,
+                "",
+                None if force_automatic_language else self._language_for_audio(audio),
+            )
+        except Exception as error:
+            print(
+                f"context verification failed: {error}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return result, "context-check-error"
+        reconciled, status = reconcile_context_words(
+            result.text,
+            unbiased.text,
+            context,
+        )
+        return DecodeResult(
+            reconciled,
+            unbiased.language or result.language,
+        ), status
+
+    def _recent_context_preview(
+        self,
+        audio: np.ndarray,
+        context_revision: int,
+    ) -> str | None:
+        """Return recent full-window preview evidence for this utterance."""
+        with self.lock:
+            text = getattr(self, "_last_context_preview_text", None)
+            decoded_len = getattr(self, "_last_context_preview_len", 0)
+            decoded_start = getattr(self, "_last_context_preview_start", 0)
+            decoded_revision = getattr(
+                self,
+                "_last_context_preview_revision",
+                -1,
+            )
+        unseen = len(audio) - decoded_len
+        max_unseen = int(CONTEXT_PREVIEW_MAX_UNSEEN_SEC * SAMPLE_RATE)
+        if (
+            text is None
+            or decoded_revision != context_revision
+            or decoded_start != 0
+            or unseen < 0
+            or unseen > max_unseen
+        ):
+            return None
+        return text
 
     def _reusable_preview(
         self,
         audio: np.ndarray,
         context_revision: int,
-    ) -> tuple[str, str, int] | None:
-        """Return (text, mode, unseen samples) when preview reuse is safe."""
+    ) -> tuple[str, str, int, str | None] | None:
+        """Return text, mode, unseen samples, and detected language."""
         with self.lock:
             text = self._last_preview_text
             decoded_len = self._last_preview_len
             decoded_start = self._last_preview_start
             decoded_revision = self._last_preview_context_revision
             decoded_language = self._last_preview_language
+            detected_language = getattr(
+                self,
+                "_last_preview_detected_language",
+                None,
+            )
             stable = self._last_preview_stable
 
         if text is None or decoded_revision != context_revision:
@@ -263,12 +891,12 @@ class Server:
         if unseen == 0:
             # Same samples + same context produces the same deterministic final
             # result, so a second pass would be pure duplicate work.
-            return text, "reuse-exact", 0
+            return text, "reuse-exact", 0, detected_language
 
         max_tail = int(MAX_SILENT_REUSE_TAIL * SAMPLE_RATE)
         tail = audio[decoded_len:]
         if unseen <= max_tail and stable and is_confident_silence(tail):
-            return text, "reuse-silent-tail", unseen
+            return text, "reuse-silent-tail", unseen, detected_language
         return None
 
     @staticmethod
@@ -280,6 +908,7 @@ class Server:
         mode: str,
         wait_ms: int,
         unseen_samples: int = 0,
+        language: str | None = None,
     ) -> None:
         emit({
             "type": "final",
@@ -290,6 +919,7 @@ class Server:
             "wait_ms": wait_ms,
             "mode": mode,
             "unseen_ms": int(unseen_samples / SAMPLE_RATE * 1000),
+            "language": language or "unknown",
         })
 
     def _join_preview_thread(self, timeout: float | None = 5.0) -> bool:
@@ -322,7 +952,8 @@ class Server:
             audio, preview_start = preview_audio(full_audio)
             try:
                 decode_started = time.perf_counter()
-                text = self._decode_preview(audio, context)
+                result = self._decode_preview_result(audio, context)
+                text = result.text
                 decode_seconds = time.perf_counter() - decode_started
                 stable = text == self._prev
                 agreed = commonprefix(text, self._prev)
@@ -345,7 +976,13 @@ class Server:
                     # recognition. Only a completed short clip receives the
                     # user's one-word language guidance.
                     self._last_preview_language = None
+                    self._last_preview_detected_language = result.language
                     self._last_preview_stable = stable
+                    if transcript_contains_context_word(text, context):
+                        self._last_context_preview_text = text
+                        self._last_context_preview_len = full_len
+                        self._last_context_preview_start = preview_start
+                        self._last_context_preview_revision = context_revision
                 if self.active:
                     emit({
                         "type": "partial",
@@ -385,7 +1022,12 @@ class Server:
             self._last_preview_start = 0
             self._last_preview_context_revision = -1
             self._last_preview_language = None
+            self._last_preview_detected_language = None
             self._last_preview_stable = False
+            self._last_context_preview_text = None
+            self._last_context_preview_len = 0
+            self._last_context_preview_start = 0
+            self._last_context_preview_revision = -1
         self.committed = ""
         self._prev = ""
         requested_language = normalize_short_utterance_language(
@@ -445,11 +1087,31 @@ class Server:
         # whole utterance (or differs only by a short stable silence tail). Emit
         # before waiting for a newer, now-unneeded preview that may be in flight.
         reusable = self._reusable_preview(audio, context_revision)
+        preview_context = self._recent_context_preview(audio, context_revision)
         if reusable is not None:
-            text, mode, unseen = reusable
-            self._emit_final(text, secs, 0, stop_started, mode, 0, unseen)
-            self._join_preview_thread()
-            return
+            text, mode, unseen, detected_language = reusable
+            repair_target = language_repair_target(
+                text,
+                detected_language,
+                secs,
+            )
+            if (
+                repair_target is None
+                and not transcript_contains_context_word(text, context)
+                and preview_context is None
+            ):
+                self._emit_final(
+                    text,
+                    secs,
+                    0,
+                    stop_started,
+                    mode,
+                    0,
+                    unseen,
+                    detected_language,
+                )
+                self._join_preview_thread()
+                return
 
         wait_started = time.perf_counter()
         if not self._join_preview_thread():
@@ -459,40 +1121,110 @@ class Server:
 
         # The in-flight preview may have completed on exactly the final buffer
         # while stop() was waiting. Reuse it before scheduling another pass.
+        preview_context = self._recent_context_preview(audio, context_revision)
         reusable = self._reusable_preview(audio, context_revision)
         if reusable is not None:
-            text, mode, unseen = reusable
-            self._emit_final(text, secs, 0, stop_started, mode, wait_ms, unseen)
+            text, mode, unseen, detected_language = reusable
+            result = DecodeResult(text, detected_language)
+            repair_target = language_repair_target(text, detected_language, secs)
+            inference_started = time.perf_counter()
+            try:
+                repaired, accepted_target = self._repair_short_language(
+                    audio,
+                    context,
+                    result,
+                )
+                repaired, context_check = self._verify_context_result(
+                    audio,
+                    context,
+                    repaired,
+                    preview_context,
+                )
+            except Exception as e:
+                emit({"type": "error", "message": f"final: {e}"})
+                return
+            inference_ms = int((time.perf_counter() - inference_started) * 1000)
+            final_mode = mode
+            if accepted_target is not None:
+                final_mode += f"-language-repair-{accepted_target.casefold()}"
+            elif repair_target is not None:
+                final_mode += "-language-repair-rejected"
+            if context_check is not None:
+                final_mode += f"-{context_check}"
+            self._emit_final(
+                repaired.text,
+                secs,
+                inference_ms,
+                stop_started,
+                final_mode,
+                wait_ms,
+                unseen,
+                repaired.language,
+            )
             return
 
         inference_started = time.perf_counter()
         try:
-            text = self._decode_final(audio, context)
+            result = self._decode_final_result(audio, context)
+            repair_target = None
+            accepted_target = None
+            if self._language_for_audio(audio) is None:
+                repair_target = language_repair_target(
+                    result.text,
+                    result.language,
+                    secs,
+                )
+                result, accepted_target = self._repair_short_language(
+                    audio,
+                    context,
+                    result,
+                )
+            result, context_check = self._verify_context_result(
+                audio,
+                context,
+                result,
+                preview_context,
+            )
         except Exception as e:
             emit({"type": "error", "message": f"final: {e}"})
             return
         inference_ms = int((time.perf_counter() - inference_started) * 1000)
+        mode = "fresh-final"
+        if accepted_target is not None:
+            mode += f"-language-repair-{accepted_target.casefold()}"
+        elif repair_target is not None:
+            mode += "-language-repair-rejected"
+        if context_check is not None:
+            mode += f"-{context_check}"
         self._emit_final(
-            text,
+            result.text,
             secs,
             inference_ms,
             stop_started,
-            "fresh-final",
+            mode,
             wait_ms,
+            language=result.language,
         )
 
 
 def main() -> int:
     model_id = os.environ.get("SPEEKIUM_MODEL", "Qwen/Qwen3-ASR-0.6B")
+    engine = os.environ.get("SPEEKIUM_ENGINE", "qwen3")
     bits = int(os.environ.get("SPEEKIUM_BITS", "8"))
     context = os.environ.get("SPEEKIUM_CONTEXT", "")
     short_utterance_language = os.environ.get(
         "SPEEKIUM_SHORT_UTTERANCE_LANGUAGE",
-        "English",
+        "",
     )
 
     try:
-        server = Server(model_id, bits, context, short_utterance_language)
+        server = Server(
+            model_id,
+            bits,
+            context,
+            short_utterance_language,
+            engine=engine,
+        )
     except Exception as e:
         emit({"type": "error", "message": f"load: {e}"})
         return 1

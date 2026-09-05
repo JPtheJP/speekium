@@ -2,9 +2,49 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
+struct DeferredTranscriptDelivery: Equatable {
+    let text: String
+    let adjustForCursor: Bool
+}
+
+struct TranscriptDeliveryGate {
+    private(set) var pending: DeferredTranscriptDelivery?
+
+    mutating func submit(
+        _ delivery: DeferredTranscriptDelivery,
+        whileContextIsResolving: Bool
+    ) -> DeferredTranscriptDelivery? {
+        guard whileContextIsResolving else {
+            pending = nil
+            return delivery
+        }
+        pending = delivery
+        return nil
+    }
+
+    mutating func takePending() -> DeferredTranscriptDelivery? {
+        defer { pending = nil }
+        return pending
+    }
+
+    mutating func reset() {
+        pending = nil
+    }
+}
+
 @main
 enum Main {
     static func main() {
+        if TriggerShortcutE2E.isRequested {
+            TriggerShortcutE2E.run()
+            return
+        }
+
+        if ContextAwareCapitalizationE2E.isRequested {
+            ContextAwareCapitalizationE2E.run()
+            return
+        }
+
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -18,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let speechEngineStartupTimeout: TimeInterval = 20
 
     private let state = AppState()
-    private let settings = Settings.shared
+    private lazy var settings = Settings.shared
     private let windows = AppWindows()
     private let runtime = RuntimeManager.shared
 
@@ -35,8 +75,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var speechEngineStartupWork: DispatchWorkItem?
     private var shouldShowFirstDictationCoach = false
     private var precedingTextAtDictationStart: String?
+    private var resolvedPrecedingText: String?
+    private var hasResolvedPrecedingText = false
+    private var isResolvingPrecedingText = false
+    private var transcriptDeliveryGate = TranscriptDeliveryGate()
+    private var cursorContextGeneration = 0
+    private var activeCursorContextGeneration: Int?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The updater retains its rollback copy until this process proves that
+        // AppKit reached the application delegate and stays alive briefly.
+        UpdateLaunchHealth.signalIfRequested()
+        mergeCrossBuildContentIfNeeded()
         panel = HUDPanel(state: state)
         state.onDictationLimitReached = { [weak self] in
             guard let self else { return }
@@ -48,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let trusted = AXIsProcessTrusted()
         Log.write("launch: accessibility=\(trusted ? "granted" : "DENIED") "
                   + "onboarded=\(settings.hasCompletedOnboarding) "
+                  + "coachPending=\(settings.needsFirstDictationCoach) "
                   + "developerTestMode=\(DeveloperTestMode.isEnabled)")
         NotificationCenter.default.addObserver(
             self,
@@ -57,10 +108,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         if runtime.isReady, ModelCatalog.state(for: settings.model).isInstalled {
+            if settings.hasCompletedOnboarding {
+                queueFirstDictationCoachIfNeeded()
+            }
             startSpeechEngine()
             if settings.hasCompletedOnboarding {
                 // Onboarding requests these itself; only prompt directly when skipped.
-                AVCaptureDevice.requestAccess(for: .audio) { _ in }
+                AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+                    Task { @MainActor in self?.presentFirstDictationCoachIfReady() }
+                }
                 if !trusted { HotKeyMonitor.ensureAccessibility() }
             } else {
                 showOnboarding()
@@ -68,6 +124,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             presentSetup()
         }
+    }
+
+    private func mergeCrossBuildContentIfNeeded() {
+        do {
+            guard let pending = try LegacyPreferencesMigration.pendingPlan() else { return }
+            LegacyPreferencesMigration.apply(pending)
+            let summary = pending.summary
+            Log.write(
+                "cross-build content merge completed: "
+                    + "vocabularyAdded=\(summary.vocabularyAdded) "
+                    + "shortcutsAdded=\(summary.shortcutsAdded) "
+                    + "shortcutConflictsSkipped=\(summary.shortcutConflictsSkipped) "
+                    + "invalidShortcutsSkipped=\(summary.invalidShortcutsSkipped)"
+            )
+        } catch {
+            // A malformed counterpart must never overwrite the current domain.
+            Log.write("cross-build content merge failed: \(error)")
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // Returning from System Settings is the only reliable signal that an
+        // Accessibility grant may have changed. A pending coach survives the
+        // permission-skip path and is retried here.
+        presentFirstDictationCoachIfReady()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -84,10 +165,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOnboarding() {
-        let shouldOfferFirstDictationCoach = FirstDictationCoachPolicy.shouldOffer(
-            hasCompletedOnboarding: settings.hasCompletedOnboarding,
-            isDeveloperFirstRunSimulation: DeveloperTestMode.isEnabled
-        )
         windows.showOnboarding(
             settings: settings,
             runtime: runtime,
@@ -96,22 +173,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.settings.hasCompletedOnboarding = true
             self.startSpeechEngine()
-            if shouldOfferFirstDictationCoach,
-               AXIsProcessTrusted(),
-               AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
-                self.shouldShowFirstDictationCoach = true
-                self.presentFirstDictationCoachIfReady()
-            }
+            self.queueFirstDictationCoachIfNeeded()
         }
     }
 
+    private func queueFirstDictationCoachIfNeeded() {
+        guard FirstDictationCoachPolicy.shouldOffer(
+            needsFirstDictationCoach: settings.needsFirstDictationCoach,
+            isDeveloperFirstRunSimulation: DeveloperTestMode.isEnabled
+        ) else { return }
+        shouldShowFirstDictationCoach = true
+        presentFirstDictationCoachIfReady()
+    }
+
     private func presentFirstDictationCoachIfReady() {
-        guard shouldShowFirstDictationCoach, isASRReady else { return }
-        shouldShowFirstDictationCoach = false
+        guard FirstDictationCoachPolicy.shouldPresent(
+            isQueued: shouldShowFirstDictationCoach,
+            isSpeechEngineReady: isASRReady,
+            hasMicrophonePermission: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+            hasAccessibilityPermission: AXIsProcessTrusted()
+        ) else { return }
+        markFirstDictationCoachHandled()
         windows.showFirstDictationCoach(
-            key: settings.triggerKey,
+            shortcut: settings.triggerShortcut,
             mode: settings.activationMode
         )
+    }
+
+    private func markFirstDictationCoachHandled() {
+        shouldShowFirstDictationCoach = false
+        settings.needsFirstDictationCoach = false
     }
 
     private func startSpeechEngine() {
@@ -126,21 +217,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        hotkey = HotKeyMonitor(key: settings.triggerKey, mode: settings.activationMode)
+        hotkey = HotKeyMonitor(
+            shortcut: settings.triggerShortcut,
+            mode: settings.activationMode
+        )
         hotkey.onStart = { [weak self] in
-            guard let self else { return }
-            self.shouldShowFirstDictationCoach = false
+            guard let self, self.beginDictation() else { return false }
+            if self.shouldShowFirstDictationCoach {
+                self.markFirstDictationCoachHandled()
+            }
             self.windows.dismissFirstDictationCoach()
-            self.beginDictation()
+            return true
         }
         hotkey.onStop = { [weak self] in self?.endDictation() }
-        hotkey.start()
-
-        settings.onChange = { [weak self] in
+        settings.onHotKeyConfigurationChange = { [weak self] in
             guard let self else { return }
-            self.hotkey.rebind(key: self.settings.triggerKey, mode: self.settings.activationMode)
+            self.hotkey.rebind(
+                shortcut: self.settings.triggerShortcut,
+                mode: self.settings.activationMode
+            )
             self.refreshStatusMenu()
         }
+        settings.onTriggerShortcutCaptureChange = { [weak self] capturing in
+            guard let hotkey = self?.hotkey else { return }
+            hotkey.setSuspendedForShortcutCapture(capturing)
+        }
+        hotkey.setSuspendedForShortcutCapture(settings.isCapturingTriggerShortcut)
         settings.onContextChange = { [weak self] terms in self?.asr?.setContext(terms) }
         settings.onModelChange = { [weak self] _ in self?.reloadASR() }
         settings.onShortUtteranceLanguageChange = { [weak self] _ in self?.reloadASR() }
@@ -150,6 +252,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.state.level = self.state.level * 0.55 + CGFloat(level) * 0.45
             }
+        }
+        capture.onFailure = { [weak self] error in
+            guard let self, self.state.phase == .listening else { return }
+            self.state.stopDictationTimer()
+            self.state.level = 0
+            self.state.phase = .failed("Microphone unavailable")
+            self.asr.stopUtterance()
+            Log.write("microphone capture stopped: \(error.localizedDescription)")
+            self.scheduleDismiss(after: 1.8)
         }
         refreshStatusMenu()
     }
@@ -194,21 +305,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let root = Bundle.main.resourceURL ?? URL(fileURLWithPath: ".")
         let script = root.appendingPathComponent("asr_server.py")
 
-        // Model/bits overrides feed the same privileged sidecar, so they honor
-        // the same development-only gate as the runtime overrides.
-        let overrides = RuntimeEnvironment(
-            bundleIdentifier: Bundle.main.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String
-        )
+        let env = RuntimeEnvironment(bundleIdentifier: Bundle.main.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String)  // SPEEKIUM_* overrides: dev builds only (F1)
         guard let python = runtime.executableURL else {
             Log.write("no managed Python runtime")
             throw CocoaError(.fileNoSuchFile)
         }
 
+        let selectedModel = settings.model.isBuiltIn ? settings.model : .small
+        let model: String
+        let engine: ASREngine
+        let bits: Int
+        if FeatureFlags.optionalModelsEnabled {
+            model = env["SPEEKIUM_MODEL"] ?? selectedModel.rawValue
+            engine = ASREngine(rawValue: env["SPEEKIUM_ENGINE"] ?? "")
+                ?? selectedModel.engine
+            bits = Int(env["SPEEKIUM_BITS"] ?? "8") ?? 8
+        } else {
+            // Release builds ignore developer overrides as well as old custom
+            // selections, keeping the public runtime on its pinned Qwen path.
+            model = selectedModel.rawValue
+            engine = .qwen3
+            bits = 8
+        }
+
         return ASRService(
             python: python,
             script: script,
-            model: overrides.value("SPEEKIUM_MODEL") ?? settings.model.rawValue,
-            bits: overrides.value("SPEEKIUM_BITS").flatMap { Int($0) } ?? 8,
+            model: model,
+            engine: engine,
+            bits: bits,
             context: settings.asrContext,
             shortUtteranceLanguage: settings.shortUtteranceLanguage
         )
@@ -268,7 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let verb = settings.activationMode == .hold ? "Hold" : "Tap"
         let hintTitle: String
         if isASRReady {
-            hintTitle = "\(verb) \(settings.triggerKey.symbol) \(settings.triggerKey.label) to dictate"
+            hintTitle = "\(verb) \(settings.triggerShortcut.compactDisplay) to dictate"
         } else if asr != nil {
             hintTitle = "Speech engine warming up…"
         } else {
@@ -307,54 +432,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Dictation lifecycle
 
-    private func beginDictation() {
+    @discardableResult
+    private func beginDictation() -> Bool {
         guard isASRReady else {
             guard asr != nil else {
                 state.phase = .failed("Speech engine is not running")
                 panel.present()
                 scheduleDismiss(after: 1.8)
-                return
+                return false
             }
             state.phase = .loading
             panel.present()
-            return
+            return false
         }
-        guard state.phase != .listening else { return }
+        guard state.phase != .listening else { return false }
+        guard activeCursorContextGeneration == nil else {
+            Log.write("dictation start ignored while cursor context probe settles")
+            return false
+        }
         dismissWork?.cancel()
+        cursorContextGeneration &+= 1
+        resolvedPrecedingText = nil
+        isResolvingPrecedingText = false
+        transcriptDeliveryGate.reset()
         precedingTextAtDictationStart = settings.autoInsert
-            && (settings.contextAwareCapitalization
-                || settings.shortUtteranceLanguage.usesCursorContext)
+            && settings.contextAwareCapitalization
             ? TextInserter.textBeforeCursor()
             : nil
+        resolvedPrecedingText = precedingTextAtDictationStart
+        hasResolvedPrecedingText = precedingTextAtDictationStart != nil
         state.reset()
         state.phase = .listening
         state.startDictationTimer()
         panel.present()
 
-        // Pause playing music before the mic opens so Bluetooth stays in stereo
-        // and nothing plays through the call-quality window.
+        // Pause playing music before the mic opens so Bluetooth stays in stereo.
         media.pauseForDictation()
         settings.playStart()
         let shortLanguage = ShortUtteranceLanguageResolver.modelLanguage(
-            for: settings.shortUtteranceLanguage,
-            precedingText: precedingTextAtDictationStart
+            for: settings.shortUtteranceLanguage
         )
         asr.beginUtterance(shortUtteranceLanguage: shortLanguage)
-        do { try capture.start() } catch {
+        do {
+            try capture.start()
+            // Accessibility is instantaneous when an editor exposes its text.
+            // For other apps, run the guarded keyboard fallback while the user
+            // is speaking so its clipboard waits are off the critical path.
+            if settings.autoInsert,
+               settings.contextAwareCapitalization,
+               !hasResolvedPrecedingText {
+                startCursorContextResolution(allowWhilePhysicalModifiersPressed: true)
+            }
+            return true
+        } catch {
+            asr.stopUtterance()
+            cancelCursorContextResolution()
             state.stopDictationTimer()
             state.phase = .failed("Microphone unavailable")
             scheduleDismiss(after: 1.6)
+            return false
         }
     }
 
     private func endDictation() {
+        // Releasing the shortcut during first-launch warm-up must not dismiss
+        // the HUD. Startup completion owns that lifecycle and replaces it with
+        // the brief Ready state before dismissal.
+        guard state.phase != .loading else { return }
         guard state.phase == .listening else { return }
         capture.stop()
-        // Mic is closed; resume whatever we paused (Bluetooth returns to stereo).
         media.resumeAfterDictation()
         state.stopDictationTimer()
         state.level = 0
         state.phase = .thinking
+        if settings.autoInsert,
+           settings.contextAwareCapitalization,
+           !hasResolvedPrecedingText,
+           !isResolvingPrecedingText {
+            startCursorContextResolution(allowWhilePhysicalModifiersPressed: false)
+        }
         asr.stopUtterance()
     }
 
@@ -373,7 +529,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             presentFirstDictationCoachIfReady()
             if state.phase == .loading {
                 if panel.isVisible {
-                    dismissNow()
+                    state.phase = .ready
+                    scheduleDismiss(after: 0.65)
                 } else {
                     state.phase = .idle
                 }
@@ -386,16 +543,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state.tail = tail
 
         case let .final(text, secs, ms):
-            let startingPrecedingText = precedingTextAtDictationStart
             precedingTextAtDictationStart = nil
             state.lastAudioSecs = secs
             state.lastDurationMS = ms
             guard !text.isEmpty else {
+                cancelCursorContextResolution()
                 dismissNow()
                 return
             }
             let normalizedText = SpokenSymbolNormalizer.normalize(
-                SpokenNumberNormalizer.normalize(text)
+                SpelledLetterNormalizer.normalize(
+                    SpokenNumberNormalizer.normalize(text)
+                )
             )
             let formattedText = TranscriptFormatter.format(
                 normalizedText,
@@ -406,29 +565,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.write("voice shortcut matched id=\(matchedID) inputChars=\(normalizedText.count) outputChars=\(expansion.text.count)")
             }
             // Shortcut replacements are user-authored literal output; preserve
-            // their casing even when they are inserted mid-sentence.
-            if settings.autoInsert,
-               settings.contextAwareCapitalization,
-               expansion.matchedShortcutID == nil {
-                TextInserter.resolveTextBeforeCursor(fallback: startingPrecedingText) {
-                    [weak self] precedingText in
-                    self?.deliverFinalTranscript(
-                        expansion.text,
-                        precedingText: precedingText,
-                        adjustForCursor: true
-                    )
-                }
+            // their casing even when they are inserted mid-sentence. Every
+            // delivery still passes through the gate: a keyboard cursor probe
+            // owns the selection and pasteboard until its completion callback,
+            // even when the final text does not need capitalization adjustment.
+            let delivery = DeferredTranscriptDelivery(
+                text: expansion.text,
+                adjustForCursor: settings.autoInsert
+                    && settings.contextAwareCapitalization
+                    && expansion.matchedShortcutID == nil
+            )
+            if let ready = transcriptDeliveryGate.submit(
+                delivery,
+                whileContextIsResolving: isResolvingPrecedingText
+            ) {
+                deliverTranscript(ready)
             } else {
-                deliverFinalTranscript(
-                    expansion.text,
-                    precedingText: nil,
-                    adjustForCursor: false
-                )
+                Log.write("transcript delivery waiting for cursor context probe")
             }
 
         case let .error(message):
-            precedingTextAtDictationStart = nil
+
             media.resumeAfterDictation()
+            cancelCursorContextResolution()
             if !isASRReady {
                 speechEngineStartupWork?.cancel()
                 speechEngineStartupWork = nil
@@ -445,8 +604,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleDismiss(after: 1.8)
 
         case let .terminated(message):
-            precedingTextAtDictationStart = nil
+
             media.resumeAfterDictation()
+            cancelCursorContextResolution()
             speechEngineStartupWork?.cancel()
             speechEngineStartupWork = nil
             speechEngineStartedAt = nil
@@ -459,6 +619,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshStatusMenu()
             scheduleDismiss(after: 1.8)
         }
+    }
+
+    private func deliverPendingTranscriptIfReady() {
+        guard !isResolvingPrecedingText,
+              let delivery = transcriptDeliveryGate.takePending() else { return }
+        deliverTranscript(delivery)
+    }
+
+    private func startCursorContextResolution(
+        allowWhilePhysicalModifiersPressed: Bool
+    ) {
+        guard !isResolvingPrecedingText, !hasResolvedPrecedingText else { return }
+        let contextGeneration = cursorContextGeneration
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        isResolvingPrecedingText = true
+        activeCursorContextGeneration = contextGeneration
+        TextInserter.resolveTextBeforeCursor(
+            fallback: precedingTextAtDictationStart,
+            allowWhilePhysicalModifiersPressed: allowWhilePhysicalModifiersPressed
+        ) { [weak self] text in
+            guard let self,
+                  self.activeCursorContextGeneration == contextGeneration else { return }
+            self.activeCursorContextGeneration = nil
+            self.isResolvingPrecedingText = false
+            guard self.cursorContextGeneration == contextGeneration else { return }
+            self.hasResolvedPrecedingText = true
+            self.resolvedPrecedingText = text
+            let durationMS = Int(
+                (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            )
+            Log.write(
+                "cursor context prefetch finished duration=\(durationMS)ms "
+                    + "available=\(text != nil)"
+            )
+            self.deliverPendingTranscriptIfReady()
+        }
+    }
+
+    private func deliverTranscript(_ delivery: DeferredTranscriptDelivery) {
+        let precedingText = delivery.adjustForCursor ? resolvedPrecedingText : nil
+        cancelCursorContextResolution()
+        deliverFinalTranscript(
+            delivery.text,
+            precedingText: precedingText,
+            adjustForCursor: delivery.adjustForCursor
+        )
+    }
+
+    private func cancelCursorContextResolution() {
+        cursorContextGeneration &+= 1
+        precedingTextAtDictationStart = nil
+        resolvedPrecedingText = nil
+        hasResolvedPrecedingText = false
+        if activeCursorContextGeneration == nil {
+            isResolvingPrecedingText = false
+        }
+        transcriptDeliveryGate.reset()
     }
 
     private func deliverFinalTranscript(

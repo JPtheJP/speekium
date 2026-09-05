@@ -170,18 +170,24 @@ struct VocabularySection: View {
             }
         }
         .alert(item: $importPreview) { preview in
-            let message = "This file contains \(preview.entries.count) unique entries. "
-                + "\(preview.fileDuplicates) duplicate lines were ignored. "
-                + "\(preview.existingMatches) already exist in the current list."
+            let newCount = preview.entries.count - preview.existingMatches
+            let message = "This file contains \(newCount) new entries. "
+                + "They will be added to your current vocabulary; existing entries will stay unchanged. "
+                + "\(preview.fileDuplicates + preview.existingMatches) duplicate entries will be ignored."
+            if newCount == 0 {
+                return Alert(
+                    title: Text("No New Vocabulary"),
+                    message: Text(message),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
             return Alert(
                 title: Text("Import Vocabulary"),
                 message: Text(message),
-                primaryButton: .default(Text("Add to Existing")) {
-                    applyImport(preview, replacing: false)
+                primaryButton: .default(Text("Import \(newCount) New")) {
+                    applyImport(preview)
                 },
-                secondaryButton: .destructive(Text("Replace Existing")) {
-                    applyImport(preview, replacing: true)
-                }
+                secondaryButton: .cancel()
             )
         }
         .alert(
@@ -354,18 +360,16 @@ struct VocabularySection: View {
         }
     }
 
-    private func applyImport(_ preview: ImportPreview, replacing: Bool) {
+    private func applyImport(_ preview: ImportPreview) {
         let previous = terms
-        let updated = replacing
-            ? preview.entries
-            : VocabularyEntry.normalizedUnique(previous + preview.entries)
+        let updated = VocabularyTransfer.appending(preview.entries, to: previous)
         guard updated != previous else { return }
 
         settings.setVocabulary(updated)
-        let summary = replacing
-            ? "Replaced vocabulary with \(updated.count) entries"
-            : "Imported \(updated.count - previous.count) entries"
-        lastChange = VocabularyChange(summary: summary, previous: previous)
+        lastChange = VocabularyChange(
+            summary: "Imported \(updated.count - previous.count) entries",
+            previous: previous
+        )
     }
 }
 

@@ -38,6 +38,12 @@ enum VocabularyTransferError: LocalizedError {
 enum VocabularyTransfer {
     static let contentType = UTType.plainText
 
+    /// Appends imported entries while preserving the current list and its
+    /// ordering. Existing entries always win when the import contains a match.
+    static func appending(_ imported: [String], to existing: [String]) -> [String] {
+        VocabularyEntry.normalizedUnique(existing + imported)
+    }
+
     static func parse(_ data: Data) throws -> ParsedVocabulary {
         guard var text = String(data: data, encoding: .utf8) else {
             throw VocabularyTransferError.invalidUTF8

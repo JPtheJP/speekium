@@ -49,7 +49,15 @@ final class ModelDownloader: ObservableObject {
 
     func start(_ model: ASRModel) {
         guard active == nil else { return }
+        guard FeatureFlags.optionalModelsEnabled || model.isBuiltIn else {
+            failure = "Custom speech models are not available in this version of Speekium."
+            return
+        }
         guard !ModelCatalog.state(for: model).isInstalled else { return }
+        guard model.isDownloadable else {
+            failure = "The selected local model folder is unavailable."
+            return
+        }
 
         if ModelCatalog.isDeveloperTestMode {
             Log.write("model: developer simulation started for " + model.rawValue)
@@ -79,7 +87,7 @@ final class ModelDownloader: ObservableObject {
         runProcess(
             python: python,
             script: script,
-            arguments: ["--preflight", model.rawValue],
+            arguments: operationArguments("--preflight", model: model),
             mode: .preflight
         )
     }
@@ -102,6 +110,7 @@ final class ModelDownloader: ObservableObject {
     /// Opens the same scoped cleanup flow from Settings without starting a
     /// network request first.
     func requestCleanup(for model: ASRModel) {
+        guard FeatureFlags.optionalModelsEnabled || model.isBuiltIn else { return }
         guard active == nil, ModelCatalog.incompleteBytes(for: model) > 0 else { return }
         active = model
         phase = .awaitingCleanup
@@ -126,7 +135,7 @@ final class ModelDownloader: ObservableObject {
         runProcess(
             python: python,
             script: script,
-            arguments: ["--cleanup", model.rawValue],
+            arguments: operationArguments("--cleanup", model: model),
             mode: .cleanup
         )
     }
@@ -155,7 +164,7 @@ final class ModelDownloader: ObservableObject {
         runProcess(
             python: python,
             script: script,
-            arguments: ["--download", model.rawValue],
+            arguments: operationArguments("--download", model: model),
             mode: .download
         )
     }
@@ -320,7 +329,12 @@ final class ModelDownloader: ObservableObject {
                 phase = .idle
                 return
             }
-            runProcess(python: python, script: script, arguments: ["--preflight", model.rawValue], mode: .preflight)
+            runProcess(
+                python: python,
+                script: script,
+                arguments: operationArguments("--preflight", model: model),
+                mode: .preflight
+            )
         case .download:
             finish(ok: ok)
         case .none:
@@ -347,5 +361,9 @@ final class ModelDownloader: ObservableObject {
     private static func decodePreflight(_ object: [String: Any]) -> ModelPreflight? {
         guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
         return try? JSONDecoder().decode(ModelPreflight.self, from: data)
+    }
+
+    private func operationArguments(_ operation: String, model: ASRModel) -> [String] {
+        [operation, model.rawValue, model.engine.rawValue]
     }
 }

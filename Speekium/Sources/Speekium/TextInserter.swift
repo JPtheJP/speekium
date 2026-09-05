@@ -40,14 +40,16 @@ enum TextInserter {
         _ text: String,
         insertionText: String? = nil,
         insertAtCursor: Bool,
-        copyToClipboard: Bool
+        copyToClipboard: Bool,
+        targetProcessID: pid_t? = nil
     ) {
         guard !text.isEmpty else { return }
 
         if insertAtCursor {
             insert(
                 insertionText ?? text,
-                clipboardAfterPaste: copyToClipboard ? text : nil
+                clipboardAfterPaste: copyToClipboard ? text : nil,
+                targetProcessID: targetProcessID
             )
         } else if copyToClipboard {
             copyOnly(text)
@@ -56,7 +58,11 @@ enum TextInserter {
         }
     }
 
-    private static func insert(_ text: String, clipboardAfterPaste: String?) {
+    private static func insert(
+        _ text: String,
+        clipboardAfterPaste: String?,
+        targetProcessID: pid_t?
+    ) {
         guard !text.isEmpty else { return }
 
         let front = NSWorkspace.shared.frontmostApplication
@@ -75,7 +81,7 @@ enum TextInserter {
         // view; posting Cmd-V in the same runloop tick often pastes stale
         // contents or nothing at all.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            pressCommandV()
+            pressCommandV(targetProcessID: targetProcessID)
 
             if saved != nil || clipboardAfterPaste != text {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
@@ -107,16 +113,21 @@ enum TextInserter {
         Log.write("copied \(text.count) chars (insert at cursor off)")
     }
 
-    /// Resolves continuation context without requiring every destination app
-    /// to expose a complete Accessibility text API. Accessibility remains the
-    /// fast path. If it yields nothing, a short reversible keyboard probe
-    /// copies the current line prefix, restores both caret and clipboard, then
-    /// returns the prefix asynchronously.
+    /// Resolves continuation context while keeping the probe isolated from the
+    /// final paste. Accessibility is the fast, read-only path. Apps that do not
+    /// expose cursor text use a keyboard-copy fallback. Callers can start that
+    /// fallback while dictation is in progress because its private event source
+    /// carries only the explicit shortcut flags, not a held trigger modifier.
+    /// They must still wait for completion before inserting so a delayed copy
+    /// can never overwrite the transcript.
     static func resolveTextBeforeCursor(
         fallback: String?,
+        forceKeyboardFallback: Bool = false,
+        allowWhilePhysicalModifiersPressed: Bool = false,
+        targetProcessID: pid_t? = nil,
         completion: @escaping (String?) -> Void
     ) {
-        if let text = textBeforeCursor() {
+        if !forceKeyboardFallback, let text = textBeforeCursor() {
             completion(text)
             return
         }
@@ -125,56 +136,164 @@ enum TextInserter {
             completion(fallback)
             return
         }
-        copyLinePrefixBeforeCursor { text in
-            completion(text ?? fallback)
+
+        if allowWhilePhysicalModifiersPressed {
+            copyLinePrefixBeforeCursor(targetProcessID: targetProcessID) { copiedText in
+                completion(preferredTextBeforeCursor(
+                    readableText: copiedText,
+                    fallback: fallback
+                ))
+            }
+            return
+        }
+
+        waitForPhysicalModifiersToClear { modifiersCleared in
+            guard modifiersCleared else {
+                Log.write("cursor context keyboard probe skipped: modifier still pressed")
+                completion(fallback)
+                return
+            }
+            copyLinePrefixBeforeCursor(targetProcessID: targetProcessID) { copiedText in
+                completion(preferredTextBeforeCursor(
+                    readableText: copiedText,
+                    fallback: fallback
+                ))
+            }
+        }
+    }
+
+    /// Kept separate from the Accessibility lookup so fallback precedence is
+    /// deterministic and covered without synthesizing cross-app input events.
+    static func preferredTextBeforeCursor(
+        readableText: String?,
+        fallback: String?
+    ) -> String? {
+        readableText ?? fallback
+    }
+
+    private static func waitForPhysicalModifiersToClear(
+        deadline: DispatchTime = .now() + 0.8,
+        completion: @escaping (Bool) -> Void
+    ) {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        let blockingFlags: CGEventFlags = [
+            .maskCommand,
+            .maskAlternate,
+            .maskControl,
+            .maskShift,
+            .maskSecondaryFn,
+        ]
+        if flags.intersection(blockingFlags).isEmpty {
+            completion(true)
+            return
+        }
+        guard DispatchTime.now() < deadline else {
+            completion(false)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            waitForPhysicalModifiersToClear(deadline: deadline, completion: completion)
         }
     }
 
     private static func copyLinePrefixBeforeCursor(
+        targetProcessID: pid_t?,
         completion: @escaping (String?) -> Void
     ) {
         let pasteboard = NSPasteboard.general
         let saved = PasteboardSnapshot(pasteboard)
 
-        // First make sure the user does not already have a selection. Changing
-        // an existing selection would alter the intended paste destination.
+        // Detect and preserve an existing selection before changing the caret.
+        // Polling avoids treating a slow destination app as if no copy occurred.
         pasteboard.clearContents()
         let selectionProbeCount = pasteboard.changeCount
-        pressCommandKey(8) // C
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.045) {
-            guard pasteboard.changeCount == selectionProbeCount else {
+        pressCommandKey(8, targetProcessID: targetProcessID) // C
+        waitForPasteboardChange(
+            pasteboard,
+            after: selectionProbeCount,
+            timeout: 0.3
+        ) { selectionChanged, _ in
+            guard !selectionChanged else {
                 saved.restore(to: pasteboard)
                 Log.write("cursor context keyboard probe skipped: existing selection")
                 completion(nil)
                 return
             }
 
-            pressCommandShiftLeft()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.045) {
+            // Select from the caret to the beginning of the current line, then
+            // copy it. Every event carries explicit modifier flags and uses a
+            // private source, so a held push-to-talk modifier cannot transform
+            // the shortcut into another command.
+            pressCommandShiftLeft(targetProcessID: targetProcessID)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 pasteboard.clearContents()
                 let prefixProbeCount = pasteboard.changeCount
-                pressCommandKey(8) // C
+                pressCommandKey(8, targetProcessID: targetProcessID) // C
+                waitForPasteboardChange(
+                    pasteboard,
+                    after: prefixProbeCount,
+                    timeout: 0.5
+                ) { changed, copiedText in
+                    // A pasteboard change proves the selection-and-copy
+                    // shortcut succeeded, so Right Arrow safely collapses the
+                    // selection back to the original caret. With no change,
+                    // there may be no selection at all (notably on an empty
+                    // Google Docs bullet); a naked Right Arrow would advance
+                    // the caret into the next list paragraph.
+                    if shouldCollapseKeyboardSelection(
+                        pasteboardChanged: changed
+                    ) {
+                        pressKey(124, targetProcessID: targetProcessID) // Right Arrow
+                    }
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.065) {
-                    let copied = pasteboard.changeCount != prefixProbeCount
-                        ? pasteboard.string(forType: .string)
-                        : nil
-                    if copied != nil {
-                        // The selection runs from the line start to the original
-                        // caret, so Right collapses it back to that caret.
-                        pressKey(124) // Right Arrow
+                    // Leave time for the caret event and any timed-out copy to
+                    // settle before restoring the clipboard and permitting the
+                    // final transcript paste.
+                    let settleDelay = changed ? 0.1 : 0.25
+                    DispatchQueue.main.asyncAfter(deadline: .now() + settleDelay) {
+                        saved.restore(to: pasteboard)
+                        if let copiedText {
+                            Log.write("cursor context source=keyboard-copy chars=\(copiedText.count)")
+                        } else {
+                            Log.write("cursor context keyboard probe unavailable")
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            completion(copiedText)
+                        }
                     }
-                    saved.restore(to: pasteboard)
-                    if let copied {
-                        Log.write("cursor context source=keyboard-copy chars=\(copied.count)")
-                    } else {
-                        Log.write("cursor context keyboard probe unavailable")
-                    }
-                    completion(copied)
                 }
             }
         }
+    }
+
+    /// Kept as a pure decision so the empty-line caret regression remains
+    /// covered without synthesizing global keyboard events in a unit test.
+    static func shouldCollapseKeyboardSelection(
+        pasteboardChanged: Bool
+    ) -> Bool {
+        pasteboardChanged
+    }
+
+    private static func waitForPasteboardChange(
+        _ pasteboard: NSPasteboard,
+        after changeCount: Int,
+        timeout: TimeInterval,
+        completion: @escaping (Bool, String?) -> Void
+    ) {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+
+        func poll() {
+            if pasteboard.changeCount != changeCount {
+                completion(true, pasteboard.string(forType: .string))
+                return
+            }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                completion(false, nil)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: poll)
+        }
+        poll()
     }
 
     /// Returns only the short text slice immediately before the active cursor.
@@ -556,7 +675,7 @@ enum TextInserter {
         return value
     }
 
-    private static func pressCommandV() {
+    private static func pressCommandV(targetProcessID: pid_t?) {
         // .hidSystemState + .cghidEventTap is the combination that actually
         // reaches other applications; session taps get dropped for synthetic
         // modifier-key combinations.
@@ -585,16 +704,20 @@ enum TextInserter {
         vDown.flags = .maskCommand
         vUp.flags = .maskCommand
 
-        let tap: CGEventTapLocation = .cghidEventTap
-        cmdDown.post(tap: tap)
-        vDown.post(tap: tap)
-        vUp.post(tap: tap)
-        cmdUp.post(tap: tap)
-        Log.write("  posted Cmd-V to cghidEventTap")
+        for event in [cmdDown, vDown, vUp, cmdUp] {
+            post(event, targetProcessID: targetProcessID)
+        }
+        Log.write(
+            targetProcessID.map { "  posted Cmd-V to pid=\($0)" }
+                ?? "  posted Cmd-V to cghidEventTap"
+        )
     }
 
-    private static func pressCommandKey(_ keyCode: CGKeyCode) {
-        let source = CGEventSource(stateID: .hidSystemState)
+    private static func pressCommandKey(
+        _ keyCode: CGKeyCode,
+        targetProcessID: pid_t?
+    ) {
+        let source = CGEventSource(stateID: .privateState)
         let commandKey: CGKeyCode = 55
         guard let commandDown = CGEvent(
             keyboardEventSource: source,
@@ -614,12 +737,12 @@ enum TextInserter {
         keyUp.flags = .maskCommand
         commandUp.flags = []
         for event in [commandDown, keyDown, keyUp, commandUp] {
-            event.post(tap: .cghidEventTap)
+            post(event, targetProcessID: targetProcessID)
         }
     }
 
-    private static func pressCommandShiftLeft() {
-        let source = CGEventSource(stateID: .hidSystemState)
+    private static func pressCommandShiftLeft(targetProcessID: pid_t?) {
+        let source = CGEventSource(stateID: .privateState)
         let commandKey: CGKeyCode = 55
         let shiftKey: CGKeyCode = 56
         let leftArrow: CGKeyCode = 123
@@ -645,12 +768,15 @@ enum TextInserter {
         shiftUp.flags = .maskCommand
         commandUp.flags = []
         for event in [commandDown, shiftDown, leftDown, leftUp, shiftUp, commandUp] {
-            event.post(tap: .cghidEventTap)
+            post(event, targetProcessID: targetProcessID)
         }
     }
 
-    private static func pressKey(_ keyCode: CGKeyCode) {
-        let source = CGEventSource(stateID: .hidSystemState)
+    private static func pressKey(
+        _ keyCode: CGKeyCode,
+        targetProcessID: pid_t?
+    ) {
+        let source = CGEventSource(stateID: .privateState)
         guard let keyDown = CGEvent(
             keyboardEventSource: source,
             virtualKey: keyCode,
@@ -663,11 +789,20 @@ enum TextInserter {
         ) else { return }
         keyDown.flags = []
         keyUp.flags = []
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+        post(keyDown, targetProcessID: targetProcessID)
+        post(keyUp, targetProcessID: targetProcessID)
     }
 
-    /// The app running the HUD, so we can avoid pasting into ourselves.
+    private static func post(_ event: CGEvent, targetProcessID: pid_t?) {
+        SyntheticInputEvent.mark(event)
+        if let targetProcessID {
+            event.postToPid(targetProcessID)
+        } else {
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
+    /// The app running the HUD, so we can avoid probing or pasting into ourselves.
     static var frontmostBundleID: String? {
         NSWorkspace.shared.frontmostApplication?.bundleIdentifier
     }

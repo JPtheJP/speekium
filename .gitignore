@@ -10,12 +10,17 @@ __pycache__/
 
 # Locally built application bundle
 Speekium.app/
+/Speekium Migration Test.app/
 
 # ML model weights
 models/
 
 # Swift build artifacts
 Speekium/.build/
+
+# Local HUD prototypes
+warmup-preview/
+
 # macOS
 .DS_Store
 assets/icon/AppIcon.iconset/

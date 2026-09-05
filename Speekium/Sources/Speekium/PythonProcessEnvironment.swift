@@ -29,6 +29,10 @@ enum PythonProcessEnvironment {
         for key in removedKeys {
             environment.removeValue(forKey: key)
         }
+        // Importing asr_engine from Contents/Resources must never create a
+        // __pycache__ inside the signed app bundle. Any new file there breaks
+        // the code-signing seal and makes the next launch fail Gatekeeper.
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["PYTHONNOUSERSITE"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
         for (key, value) in additions {
@@ -38,10 +42,10 @@ enum PythonProcessEnvironment {
     }
 
     static func scriptArguments(script: URL, arguments: [String] = []) -> [String] {
-        ["-s", "-u", script.path] + arguments
+        ["-B", "-s", "-u", script.path] + arguments
     }
 
     static func codeArguments(_ code: String) -> [String] {
-        ["-s", "-u", "-c", code]
+        ["-B", "-s", "-u", "-c", code]
     }
 }

@@ -11,6 +11,7 @@ final class SemanticVersionTests: XCTestCase {
     func testRejectsIncompleteAndPrereleaseVersions() {
         XCTAssertNil(SemanticVersion("1.2"))
         XCTAssertNil(SemanticVersion("v1.2.3-beta.1"))
+        XCTAssertNil(SemanticVersion("vv1.2.3"))
         XCTAssertNil(SemanticVersion("latest"))
     }
 }

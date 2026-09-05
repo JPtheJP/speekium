@@ -26,7 +26,11 @@ struct RuntimeEnvironment {
     /// A development build is any whose bundle identifier is prefixed `dev.`.
     /// Release builds use `com.jpthejp.speekium` and are never development.
     static func isDevelopmentBundle(_ bundleIdentifier: String?) -> Bool {
+#if SPEEKIUM_RELEASE
+        false
+#else
         (bundleIdentifier ?? "").hasPrefix("dev.")
+#endif
     }
 
     /// The non-empty value of an override variable, or `nil` in a release build
@@ -37,4 +41,7 @@ struct RuntimeEnvironment {
         guard let value = environment[key], !value.isEmpty else { return nil }
         return value
     }
+
+    /// Subscript form so call sites can read overrides like a dictionary.
+    subscript(key: String) -> String? { value(key) }
 }

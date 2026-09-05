@@ -1,0 +1,4 @@
+# Installed with pip --no-deps by setup-mac.sh and build-runtime.sh.
+# The package declares PyTorch for checkpoint conversion, but Speekium only
+# loads already-converted MLX checkpoints and does not ship that conversion path.
+mlx-whisper==0.4.3

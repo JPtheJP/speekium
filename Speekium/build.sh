@@ -9,26 +9,91 @@ cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
 PYTHON="${PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 APP="${APP:-$PROJECT_ROOT/Speekium.app}"
-VERSION="${VERSION:-1.0.0}"
-BUILD_NUMBER="${BUILD_NUMBER:-1}"
+VERSION="${VERSION:-1.0.2}"
+BUILD_NUMBER="${BUILD_NUMBER:-4}"
 RELEASE="${RELEASE:-0}"
+ENABLE_OPTIONAL_MODELS="${ENABLE_OPTIONAL_MODELS:-}"
 RUNTIME_URL="${RUNTIME_URL:-}"
 RUNTIME_SHA256="${RUNTIME_SHA256:-}"
+RUNTIME_CONTENT_SHA256="${RUNTIME_CONTENT_SHA256:-}"
 RUNTIME_VERSION="${RUNTIME_VERSION:-}"
 RUNTIME_ARCHIVE_BYTES="${RUNTIME_ARCHIVE_BYTES:-}"
 RUNTIME_INSTALLED_BYTES="${RUNTIME_INSTALLED_BYTES:-}"
 UPDATE_REPOSITORY="${UPDATE_REPOSITORY:-JPtheJP/speekium}"
+PINNED_UPDATE_REPOSITORY="JPtheJP/speekium"
+UPDATE_PUBLIC_KEY_FILE="$PROJECT_ROOT/Speekium/update-public-key.txt"
+SIGNING_CERT_SHA1_FILE="$PROJECT_ROOT/Speekium/release-signing-certificate-sha1.txt"
+UPDATE_PUBLIC_KEY="${UPDATE_PUBLIC_KEY:-}"
+PINNED_UPDATE_PUBLIC_KEY=""
+PINNED_SIGNING_CERT_SHA1=""
+if [ -f "$UPDATE_PUBLIC_KEY_FILE" ]; then
+    PINNED_UPDATE_PUBLIC_KEY="$(tr -d '\r\n' < "$UPDATE_PUBLIC_KEY_FILE")"
+fi
+if [ -f "$SIGNING_CERT_SHA1_FILE" ]; then
+    PINNED_SIGNING_CERT_SHA1="$(tr -d '\r\n' < "$SIGNING_CERT_SHA1_FILE" \
+        | tr '[:upper:]' '[:lower:]')"
+fi
+if [ -z "$UPDATE_PUBLIC_KEY" ]; then
+    UPDATE_PUBLIC_KEY="$PINNED_UPDATE_PUBLIC_KEY"
+fi
 BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-dev.local.speekium}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 
+if [ -z "$ENABLE_OPTIONAL_MODELS" ]; then
+    if [ "$RELEASE" = "1" ]; then
+        ENABLE_OPTIONAL_MODELS=0
+    else
+        ENABLE_OPTIONAL_MODELS=1
+    fi
+fi
+if [ "$ENABLE_OPTIONAL_MODELS" != "0" ] && [ "$ENABLE_OPTIONAL_MODELS" != "1" ]; then
+    echo "error: ENABLE_OPTIONAL_MODELS must be 0 or 1" >&2
+    exit 1
+fi
+if [ "$RELEASE" = "1" ] && [ "$ENABLE_OPTIONAL_MODELS" != "0" ]; then
+    echo "error: optional models must remain disabled in public release builds" >&2
+    exit 1
+fi
+
+OPTIONAL_MODELS_PLIST_VALUE="<false/>"
+OPTIONAL_MODELS_LABEL="disabled"
+if [ "$ENABLE_OPTIONAL_MODELS" = "1" ]; then
+    OPTIONAL_MODELS_PLIST_VALUE="<true/>"
+    OPTIONAL_MODELS_LABEL="enabled"
+fi
+
+swift_build() {
+    local swift_defines=()
+    if [ "$ENABLE_OPTIONAL_MODELS" = "1" ]; then
+        swift_defines+=(
+            -Xswiftc -D -Xswiftc SPEEKIUM_ENABLE_OPTIONAL_MODELS
+        )
+    fi
+    if [ "$RELEASE" = "1" ]; then
+        # This must be compile-time, not inferred solely from mutable runtime
+        # metadata, so a release binary can never honor developer overrides.
+        swift_defines+=(
+            -Xswiftc -D -Xswiftc SPEEKIUM_RELEASE
+        )
+    fi
+    swift build "$@" "${swift_defines[@]}"
+}
+
 if [ "$RELEASE" = "1" ]; then
-    if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ] || [ -z "$RUNTIME_VERSION" ] \
+    if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || ! [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+        echo "error: release app version must be stable semantic version and build number must be positive" >&2
+        exit 1
+    fi
+    if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ] \
+        || [ -z "$RUNTIME_CONTENT_SHA256" ] || [ -z "$RUNTIME_VERSION" ] \
         || [ -z "$RUNTIME_ARCHIVE_BYTES" ] || [ -z "$RUNTIME_INSTALLED_BYTES" ]; then
-        echo "error: release builds require runtime URL, version, checksum, and byte metadata" >&2
+        echo "error: release builds require runtime URL, version, archive/content checksums, and byte metadata" >&2
         exit 1
     fi
     if ! [[ "$RUNTIME_URL" =~ ^https:// ]] || [[ "$RUNTIME_URL" == *"latest/download"* ]] \
         || ! [[ "$RUNTIME_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
+        || ! [[ "$RUNTIME_CONTENT_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
         || ! [[ "$RUNTIME_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
         || ! [[ "$RUNTIME_ARCHIVE_BYTES" =~ ^[1-9][0-9]*$ ]] \
         || ! [[ "$RUNTIME_INSTALLED_BYTES" =~ ^[1-9][0-9]*$ ]]; then
@@ -37,6 +102,16 @@ if [ "$RELEASE" = "1" ]; then
     fi
     if [ "$BUNDLE_IDENTIFIER" != "com.jpthejp.speekium" ]; then
         echo "error: release builds require bundle identifier com.jpthejp.speekium" >&2
+        exit 1
+    fi
+    if ! [[ "$PINNED_UPDATE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
+        || ! [[ "$PINNED_SIGNING_CERT_SHA1" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "error: release trust-root files are missing or malformed" >&2
+        exit 1
+    fi
+    if [ "$UPDATE_REPOSITORY" != "$PINNED_UPDATE_REPOSITORY" ] \
+        || [ "$UPDATE_PUBLIC_KEY" != "$PINNED_UPDATE_PUBLIC_KEY" ]; then
+        echo "error: release update repository and public key must match their checked-in pins" >&2
         exit 1
     fi
     if [ -z "$SIGNING_IDENTITY" ] || [ "$SIGNING_IDENTITY" = "-" ]; then
@@ -58,20 +133,61 @@ else
 fi
 
 echo "▸ compiling"
-swift build -c release
+if [ "$RELEASE" = "1" ]; then
+    # Swift embeds source and object-file paths in optimized executables. Map
+    # the repository root to a stable synthetic path so public artifacts never
+    # disclose the builder's user name or local directory layout.
+    RELEASE_PATH_FLAGS=(
+        -Xswiftc -file-prefix-map \
+        -Xswiftc "$PROJECT_ROOT=/src" \
+        -Xcc "-fdebug-prefix-map=$PROJECT_ROOT=/src" \
+        -Xcc "-ffile-prefix-map=$PROJECT_ROOT=/src"
+    )
+    # Keep the standalone signer's established binary/Keychain access
+    # requirement stable. SPEEKIUM_RELEASE is needed only by the app target's
+    # runtime-selection code.
+    swift build -c release --product SpeekiumUpdateSigner \
+        "${RELEASE_PATH_FLAGS[@]}"
+    swift build -c release --product SpeekiumUpdateInstaller \
+        "${RELEASE_PATH_FLAGS[@]}"
+    swift_build -c release --product Speekium \
+        "${RELEASE_PATH_FLAGS[@]}"
+else
+    swift_build -c release
+fi
 
 BIN=".build/release/Speekium"
+UPDATE_INSTALLER=".build/release/SpeekiumUpdateInstaller"
+UPDATE_SIGNER=".build/release/SpeekiumUpdateSigner"
 [ -x "$BIN" ] || { echo "error: build produced no binary" >&2; exit 1; }
+[ -x "$UPDATE_INSTALLER" ] || { echo "error: build produced no update installer" >&2; exit 1; }
+[ -x "$UPDATE_SIGNER" ] || { echo "error: build produced no update signer" >&2; exit 1; }
 
 echo "▸ assembling $(basename "$APP")"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 
 cp "$BIN" "$APP/Contents/MacOS/Speekium"
+cp "$UPDATE_INSTALLER" "$APP/Contents/Helpers/SpeekiumUpdateInstaller"
 cp Resources/asr_server.py "$APP/Contents/Resources/"
 cp Resources/model_download.py "$APP/Contents/Resources/"
 cp "$PROJECT_ROOT/asr_engine.py" "$APP/Contents/Resources/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+
+if [ "$RELEASE" = "1" ]; then
+    # The linker records absolute object-file paths as N_OSO debug symbols;
+    # remove those records after source paths have been remapped above.
+    strip -S "$APP/Contents/MacOS/Speekium"
+    strip -S "$APP/Contents/Helpers/SpeekiumUpdateInstaller"
+    for EXECUTABLE in \
+        "$APP/Contents/MacOS/Speekium" \
+        "$APP/Contents/Helpers/SpeekiumUpdateInstaller"; do
+        if rg -a -q '(/Users/|/home/)' "$EXECUTABLE"; then
+            echo "error: release executable contains a build-machine home path" >&2
+            exit 1
+        fi
+    done
+fi
 
 # Designed start/finish sounds. Regenerate with sound-design/render_sounds.py.
 if [ -d Resources/Sounds ]; then
@@ -104,10 +220,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 $DEVELOPMENT_PYTHON_PLIST
     <key>SpeekiumRuntimeURL</key><string>$RUNTIME_URL</string>
     <key>SpeekiumRuntimeSHA256</key><string>$RUNTIME_SHA256</string>
+    <key>SpeekiumRuntimeContentSHA256</key><string>$RUNTIME_CONTENT_SHA256</string>
     <key>SpeekiumRuntimeVersion</key><string>$RUNTIME_VERSION</string>
     <key>SpeekiumRuntimeArchiveBytes</key><string>$RUNTIME_ARCHIVE_BYTES</string>
     <key>SpeekiumRuntimeInstalledBytes</key><string>$RUNTIME_INSTALLED_BYTES</string>
     <key>SpeekiumUpdateRepository</key><string>$UPDATE_REPOSITORY</string>
+    <key>SpeekiumUpdatePublicKey</key><string>$UPDATE_PUBLIC_KEY</string>
+    <key>SpeekiumOptionalModelsEnabled</key>$OPTIONAL_MODELS_PLIST_VALUE
 </dict>
 </plist>
 PLIST
@@ -121,8 +240,10 @@ PLIST
 # different app to TCC and silently drops the Accessibility grant. A self-signed
 # certificate keeps one identity across rebuilds, so the grant sticks.
 IDENTITY="$SIGNING_IDENTITY"
+CODESIGN_OPTIONS=()
 if [ "$RELEASE" = "1" ]; then
     echo "▸ signing release with $IDENTITY"
+    CODESIGN_OPTIONS=(--options runtime,library)
 else
     if security find-identity -p codesigning 2>/dev/null | grep -q "Speekium Self-Signed"; then
         IDENTITY="Speekium Self-Signed"
@@ -134,16 +255,53 @@ else
     fi
 fi
 
-codesign --force --deep --sign "$IDENTITY" "$APP"
+if [ "$RELEASE" = "1" ]; then
+    # A stable code identity lets this release-only tool retain access to the
+    # same login-Keychain signing key across rebuilds.
+    codesign --force ${CODESIGN_OPTIONS[@]+"${CODESIGN_OPTIONS[@]}"} --sign "$IDENTITY" "$UPDATE_SIGNER"
+    codesign --verify --strict "$UPDATE_SIGNER"
+    codesign --verify --strict \
+        -R="identifier \"SpeekiumUpdateSigner\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
+        "$UPDATE_SIGNER"
+fi
+codesign --force ${CODESIGN_OPTIONS[@]+"${CODESIGN_OPTIONS[@]}"} --sign "$IDENTITY" \
+    "$APP/Contents/Helpers/SpeekiumUpdateInstaller"
+# Nested code is signed explicitly above; signing the outer bundle without
+# --deep prevents codesign from making implicit nested-code decisions.
+codesign --force ${CODESIGN_OPTIONS[@]+"${CODESIGN_OPTIONS[@]}"} --sign "$IDENTITY" "$APP"
 if [ "$RELEASE" = "1" ]; then
     codesign --verify --strict --deep "$APP"
+    codesign --verify --strict --deep \
+        -R="identifier \"com.jpthejp.speekium\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
+        "$APP"
+    codesign --verify --strict \
+        -R="identifier \"SpeekiumUpdateInstaller\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
+        "$APP/Contents/Helpers/SpeekiumUpdateInstaller"
+    assert_hardened_runtime() {
+        local executable="$1"
+        local details
+        details="$(codesign -dv --verbose=4 "$executable" 2>&1)"
+        echo "$details" | grep -q 'flags=.*runtime' \
+            && echo "$details" | grep -q 'flags=.*library-validation' || {
+                echo "error: hardened runtime and library validation are required: $executable" >&2
+                exit 1
+            }
+    }
+    assert_hardened_runtime "$UPDATE_SIGNER"
+    assert_hardened_runtime "$APP/Contents/Helpers/SpeekiumUpdateInstaller"
+    assert_hardened_runtime "$APP"
     if /usr/libexec/PlistBuddy -c "Print :SpeekiumDevelopmentPythonPath" "$APP/Contents/Info.plist" >/dev/null 2>&1; then
         echo "error: release Info.plist contains a development Python path" >&2
+        exit 1
+    fi
+    if [ "$(/usr/libexec/PlistBuddy -c "Print :SpeekiumOptionalModelsEnabled" "$APP/Contents/Info.plist")" != "false" ]; then
+        echo "error: release Info.plist enables optional models" >&2
         exit 1
     fi
 fi
 
 echo "✓ built $APP"
+echo "  optional models: $OPTIONAL_MODELS_LABEL"
 if [ "$RELEASE" = "1" ]; then
     echo "  runtime: $RUNTIME_URL"
 else

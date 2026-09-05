@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download Qwen3-ASR weights with storage preflight and safe recovery.
+"""Download supported speech-model weights with preflight and safe recovery.
 
 All output is newline-delimited JSON so Swift can show state without parsing
 human-oriented progress text. The selected Hugging Face repository is the only
@@ -22,7 +22,15 @@ from typing import Callable, Iterable, TextIO
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
-PATTERNS = ("*.json", "*.txt", "*.safetensors")
+ENGINE_PATTERNS = {
+    "qwen3": ("*.json", "*.txt", "*.safetensors"),
+    "whisper": (
+        "config.json",
+        "model.safetensors",
+        "weights.safetensors",
+        "weights.npz",
+    ),
+}
 SAFETY_MARGIN_BYTES = 512 * 1024 * 1024
 ACTIVE_MARKER = ".speekium-download-active"
 REPO_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -36,6 +44,10 @@ class StorageCapacityError(RuntimeError):
     pass
 
 
+class CompatibilityError(RuntimeError):
+    pass
+
+
 def emit(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
@@ -44,6 +56,11 @@ def emit(obj: dict) -> None:
 def validate_repo_id(repo_id: str) -> None:
     if not REPO_ID_RE.fullmatch(repo_id):
         raise ValueError("invalid model repository")
+
+
+def validate_engine(engine: str) -> None:
+    if engine not in ENGINE_PATTERNS:
+        raise ValueError("unsupported speech engine")
 
 
 def repo_folder(cache_root: str | Path, repo_id: str) -> Path:
@@ -65,8 +82,9 @@ def resolve_cache_root() -> Path:
         return Path.home() / ".cache" / "huggingface" / "hub"
 
 
-def matching_file(name: str) -> bool:
-    return any(fnmatch.fnmatch(name, pattern) for pattern in PATTERNS)
+def matching_file(name: str, engine: str = "qwen3") -> bool:
+    validate_engine(engine)
+    return any(fnmatch.fnmatch(name, pattern) for pattern in ENGINE_PATTERNS[engine])
 
 
 def regular_files(root: Path) -> Iterable[Path]:
@@ -177,13 +195,55 @@ def available_bytes(cache_root: Path, usage: Callable[[str], object] = shutil.di
     return int(usage_result.free)
 
 
-def metadata_total(api: object, repo_id: str) -> int:
+def validate_model_files(
+    names: Iterable[str],
+    engine: str,
+    config: object | None = None,
+) -> None:
+    validate_engine(engine)
+    # Required files must be at the repository root because both runtime
+    # loaders resolve config.json and weights directly from the snapshot.
+    files = set(names)
+    if "config.json" not in files:
+        raise CompatibilityError("The repository has no config.json file.")
+    if isinstance(config, dict):
+        declared_type = config.get("model_type")
+        expected_type = "qwen3_asr" if engine == "qwen3" else "whisper"
+        if isinstance(declared_type, str) and declared_type != expected_type:
+            raise CompatibilityError(
+                f"The repository declares model type {declared_type!r}, "
+                f"not {expected_type!r}."
+            )
+    if engine == "qwen3":
+        if not {
+            "model.safetensors", "model.safetensors.index.json"
+        }.intersection(files):
+            raise CompatibilityError(
+                "The repository is not a full Qwen3-ASR checkpoint."
+            )
+    elif not {
+        "model.safetensors", "weights.safetensors", "weights.npz"
+    }.intersection(files):
+        raise CompatibilityError(
+            "The repository is not an MLX-format Whisper model."
+        )
+
+
+def metadata_total(api: object, repo_id: str, engine: str = "qwen3") -> int:
     info = api.model_info(repo_id, files_metadata=True)
+    siblings = info.siblings or []
+    names = [
+        getattr(sibling, "rfilename", None)
+        or getattr(sibling, "path", None)
+        or ""
+        for sibling in siblings
+    ]
+    validate_model_files(names, engine, getattr(info, "config", None))
     total = 0
-    for sibling in info.siblings or []:
+    for sibling in siblings:
         name = getattr(sibling, "rfilename", None) or getattr(sibling, "path", None) or ""
         size = getattr(sibling, "size", None)
-        if matching_file(name) and size is not None:
+        if matching_file(name, engine) and size is not None:
             total += int(size)
     if total <= 0:
         raise RuntimeError("the model did not report downloadable file sizes")
@@ -193,11 +253,13 @@ def metadata_total(api: object, repo_id: str) -> int:
 def preflight(
     repo_id: str,
     *,
+    engine: str = "qwen3",
     api: object | None = None,
     cache_root: str | Path | None = None,
     usage: Callable[[str], object] = shutil.disk_usage,
 ) -> dict:
     validate_repo_id(repo_id)
+    validate_engine(engine)
     if api is None:
         from huggingface_hub import HfApi
 
@@ -205,7 +267,9 @@ def preflight(
     root = Path(cache_root).expanduser() if cache_root is not None else resolve_cache_root()
     repo = repo_folder(root, repo_id)
     try:
-        total = metadata_total(api, repo_id)
+        total = metadata_total(api, repo_id, engine)
+    except CompatibilityError:
+        raise
     except Exception as exc:
         raise MetadataError(str(exc)) from exc
     try:
@@ -268,11 +332,11 @@ def attempt_progress(repo: Path, before_incomplete: set[Path], total: int) -> in
     return min(total, current_complete + current_partial)
 
 
-def run_download(repo_id: str) -> int:
+def run_download(repo_id: str, engine: str = "qwen3") -> int:
     from huggingface_hub import HfApi, snapshot_download
 
     root = resolve_cache_root()
-    first = preflight(repo_id, api=HfApi(), cache_root=root)
+    first = preflight(repo_id, engine=engine, api=HfApi(), cache_root=root)
     if first["availableBytes"] < first["requiredBytes"]:
         emit({
             "type": "error",
@@ -285,7 +349,7 @@ def run_download(repo_id: str) -> int:
 
     # Repeat both metadata and capacity immediately before downloading. The
     # first response is informative; this one is the enforceable guarantee.
-    second = preflight(repo_id, api=HfApi(), cache_root=root)
+    second = preflight(repo_id, engine=engine, api=HfApi(), cache_root=root)
     if second["availableBytes"] < second["requiredBytes"]:
         emit({
             "type": "error",
@@ -322,7 +386,7 @@ def run_download(repo_id: str) -> int:
     try:
         path = snapshot_download(
             repo_id,
-            allow_patterns=list(PATTERNS),
+            allow_patterns=list(ENGINE_PATTERNS[engine]),
             max_workers=4,
         )
     except Exception as exc:
@@ -342,13 +406,22 @@ def run_download(repo_id: str) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) < 3 or sys.argv[1] not in {"--preflight", "--cleanup", "--download"}:
-        emit({"type": "error", "category": "usage", "message": "usage: model_download.py --preflight|--cleanup|--download <repo_id>"})
+    if len(sys.argv) not in {3, 4} or sys.argv[1] not in {"--preflight", "--cleanup", "--download"}:
+        emit({
+            "type": "error",
+            "category": "usage",
+            "message": (
+                "usage: model_download.py --preflight|--cleanup|--download "
+                "<repo_id> [qwen3|whisper]"
+            ),
+        })
         return 2
     mode, repo_id = sys.argv[1:3]
+    engine = sys.argv[3] if len(sys.argv) == 4 else "qwen3"
     try:
+        validate_engine(engine)
         if mode == "--preflight":
-            emit(preflight(repo_id))
+            emit(preflight(repo_id, engine=engine))
             return 0
         if mode == "--cleanup":
             root = resolve_cache_root()
@@ -357,9 +430,11 @@ def main() -> int:
             removed = cleanup_incomplete(repo_id)
             emit({"type": "cleanup", "removedBytes": removed, "files": removed_files})
             return 0
-        return run_download(repo_id)
+        return run_download(repo_id, engine=engine)
     except Exception as exc:
-        if isinstance(exc, MetadataError):
+        if isinstance(exc, CompatibilityError):
+            category = "compatibility"
+        elif isinstance(exc, MetadataError):
             category = "metadata"
         elif isinstance(exc, StorageCapacityError):
             category = "storage"

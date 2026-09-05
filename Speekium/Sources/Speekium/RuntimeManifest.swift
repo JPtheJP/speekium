@@ -52,7 +52,8 @@ struct RuntimeManifest: Codable, Equatable {
     func compatibilityError(
         requiredRuntimeVersion: String,
         currentOS: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion,
-        architecture currentArchitecture: String = "arm64"
+        architecture currentArchitecture: String = "arm64",
+        includeOptionalModels: Bool = FeatureFlags.optionalModelsEnabled
     ) -> String? {
         guard schemaVersion == Self.supportedSchemaVersion else {
             return "The speech engine uses an unsupported manifest format."
@@ -71,7 +72,9 @@ struct RuntimeManifest: Codable, Equatable {
             return "This speech engine requires macOS \(minimumMacOS) or later."
         }
         guard payloadBytes > 0 else { return "The speech engine manifest has no payload size." }
-        let requiredDependencies = Set(["mlx", "numpy", "huggingface-hub", "mlx-qwen3-asr"])
+        let requiredDependencies = Set(FeatureFlags.requiredRuntimeModules(
+            includeOptionalModels: includeOptionalModels
+        ).values)
         guard requiredDependencies.isSubset(of: Set(dependencyVersions.keys)) else {
             return "The speech engine manifest does not describe all pinned dependencies."
         }

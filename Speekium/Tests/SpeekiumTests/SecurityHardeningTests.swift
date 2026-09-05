@@ -15,6 +15,7 @@ final class SecurityHardeningTests: XCTestCase {
         "SPEEKIUM_RUNTIME_ARCHIVE_BYTES",
         "SPEEKIUM_RUNTIME_INSTALLED_BYTES",
         "SPEEKIUM_MODEL",
+        "SPEEKIUM_ENGINE",
         "SPEEKIUM_BITS",
     ]
 
@@ -58,36 +59,6 @@ final class SecurityHardeningTests: XCTestCase {
             environment: ["SPEEKIUM_PYTHON": ""]
         )
         XCTAssertNil(development.value("SPEEKIUM_PYTHON"))
-    }
-
-    // MARK: - F2: only https://github.com release URLs are opened
-
-    func testTrustedReleaseURLAcceptsGitHubHTTPS() {
-        XCTAssertTrue(AppUpdateManager.isTrustedReleaseURL(
-            URL(string: "https://github.com/JPtheJP/speekium/releases/tag/v1.0.0")!
-        ))
-        // Scheme/host comparison is case-insensitive.
-        XCTAssertTrue(AppUpdateManager.isTrustedReleaseURL(
-            URL(string: "HTTPS://GitHub.com/JPtheJP/speekium/releases")!
-        ))
-    }
-
-    func testTrustedReleaseURLRejectsUnexpectedSchemesAndHosts() {
-        let rejected = [
-            "file:///etc/passwd",
-            "javascript:alert(1)",
-            "http://github.com/JPtheJP/speekium/releases",
-            "https://github.com.evil.example/JPtheJP/speekium",
-            "https://raw.githubusercontent.com/JPtheJP/speekium",
-            "x-apple.systempreferences:com.apple.preference.security",
-        ]
-        for raw in rejected {
-            guard let url = URL(string: raw) else { continue }
-            XCTAssertFalse(
-                AppUpdateManager.isTrustedReleaseURL(url),
-                "\(raw) must not be treated as a trusted release URL"
-            )
-        }
     }
 
     // MARK: - F3: log file is owner-only (0600)
