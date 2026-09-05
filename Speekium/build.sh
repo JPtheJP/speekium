@@ -76,7 +76,7 @@ swift_build() {
             -Xswiftc -D -Xswiftc SPEEKIUM_RELEASE
         )
     fi
-    swift build "$@" "${swift_defines[@]}"
+    swift build "$@" ${swift_defines[@]+"${swift_defines[@]}"}
 }
 
 if [ "$RELEASE" = "1" ]; then
@@ -147,11 +147,11 @@ if [ "$RELEASE" = "1" ]; then
     # requirement stable. SPEEKIUM_RELEASE is needed only by the app target's
     # runtime-selection code.
     swift build -c release --product SpeekiumUpdateSigner \
-        "${RELEASE_PATH_FLAGS[@]}"
+        ${RELEASE_PATH_FLAGS[@]+"${RELEASE_PATH_FLAGS[@]}"}
     swift build -c release --product SpeekiumUpdateInstaller \
-        "${RELEASE_PATH_FLAGS[@]}"
+        ${RELEASE_PATH_FLAGS[@]+"${RELEASE_PATH_FLAGS[@]}"}
     swift_build -c release --product Speekium \
-        "${RELEASE_PATH_FLAGS[@]}"
+        ${RELEASE_PATH_FLAGS[@]+"${RELEASE_PATH_FLAGS[@]}"}
 else
     swift_build -c release
 fi
