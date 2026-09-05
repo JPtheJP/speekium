@@ -32,3 +32,6 @@ assets/icon/icon-1024.png
 /Speekium-macos-arm64.zip
 /Speekium-macos-arm64.zip.ed25519
 /SHA256SUMS
+
+# local distribution builds (DMG staging and images)
+/dist/
