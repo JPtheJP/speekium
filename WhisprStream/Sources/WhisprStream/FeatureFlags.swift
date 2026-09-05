@@ -11,7 +11,7 @@ enum FeatureFlags {
     #endif
 
     /// Python modules and matching distribution names required by the runtime.
-    /// The public 1.0.1 runtime only needs the Qwen stack; developer builds add
+    /// The public 1.0.2 runtime only needs the Qwen stack; developer builds add
     /// the experimental MLX Whisper adapter when optional models are enabled.
     static func requiredRuntimeModules(
         includeOptionalModels: Bool = FeatureFlags.optionalModelsEnabled

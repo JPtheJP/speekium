@@ -3,11 +3,41 @@ import XCTest
 @testable import WhisprStream
 
 final class HotKeyMonitorTests: XCTestCase {
+    func testRejectedTapStartRetriesOnNextPressWithoutStopping() throws {
+        let monitor = HotKeyMonitor(key: .rightOption, mode: .tap)
+        var attempts = 0
+        var stops = 0
+        monitor.onStart = {
+            attempts += 1
+            return attempts > 1
+        }
+        monitor.onStop = { stops += 1 }
+
+        monitor.handle(try optionEvent(isDown: true))
+        monitor.handle(try optionEvent(isDown: false))
+        monitor.handle(try optionEvent(isDown: true))
+
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(stops, 0)
+    }
+
+    func testRejectedHoldStartDoesNotStopOnRelease() throws {
+        let monitor = HotKeyMonitor(key: .rightOption, mode: .hold)
+        var stops = 0
+        monitor.onStart = { false }
+        monitor.onStop = { stops += 1 }
+
+        monitor.handle(try optionEvent(isDown: true))
+        monitor.handle(try optionEvent(isDown: false))
+
+        XCTAssertEqual(stops, 0)
+    }
+
     func testExternalTimeoutMakesNextTapStartImmediately() throws {
         let monitor = HotKeyMonitor(key: .rightOption, mode: .tap)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try optionEvent(isDown: true))
@@ -25,7 +55,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(key: .rightOption, mode: .hold)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try optionEvent(isDown: true))
@@ -40,7 +70,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: .modifierOnly(.rightOption), mode: .hold)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try optionEvent(isDown: true))
@@ -54,7 +84,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: .modifierOnly(.rightOption), mode: .tap)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try optionEvent(isDown: true))
@@ -70,7 +100,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try primaryEvent(type: .keyDown, modifiers: [.control, .option, .shift]))
@@ -84,7 +114,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .tap)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try primaryEvent(type: .keyDown, modifiers: [.control, .option, .shift]))
@@ -98,7 +128,7 @@ final class HotKeyMonitorTests: XCTestCase {
     func testCustomChordRejectsMissingExtraAndCapsLockModifiers() throws {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var starts = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
 
         monitor.handle(try primaryEvent(type: .keyDown, modifiers: [.control, .option]))
         monitor.handle(try primaryEvent(type: .keyUp, modifiers: []))
@@ -118,7 +148,7 @@ final class HotKeyMonitorTests: XCTestCase {
     func testRepeatedChordKeyDownDoesNotDuplicateStart() throws {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var starts = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
 
         monitor.handle(try primaryEvent(
             type: .keyDown,
@@ -138,7 +168,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try primaryEvent(type: .keyDown, modifiers: [.control, .option, .shift]))
@@ -155,7 +185,7 @@ final class HotKeyMonitorTests: XCTestCase {
     func testExtraModifierPressedAfterActivationDoesNotStopHold() throws {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var stops = 0
-        monitor.onStart = {}
+        monitor.onStart = { true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try primaryEvent(
@@ -181,7 +211,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let hold = HotKeyMonitor(shortcut: shortcut, mode: .hold)
         var holdStarts = 0
         var holdStops = 0
-        hold.onStart = { holdStarts += 1 }
+        hold.onStart = { holdStarts += 1; return true }
         hold.onStop = { holdStops += 1 }
         hold.handle(try primaryEvent(type: .keyDown, modifiers: [], keyCode: 105))
         hold.handle(try primaryEvent(type: .keyUp, modifiers: [], keyCode: 105))
@@ -191,7 +221,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let tap = HotKeyMonitor(shortcut: shortcut, mode: .tap)
         var tapStarts = 0
         var tapStops = 0
-        tap.onStart = { tapStarts += 1 }
+        tap.onStart = { tapStarts += 1; return true }
         tap.onStop = { tapStops += 1 }
         tap.handle(try primaryEvent(type: .keyDown, modifiers: [], keyCode: 105))
         tap.handle(try primaryEvent(type: .keyUp, modifiers: [], keyCode: 105))
@@ -216,7 +246,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .tap)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try primaryEvent(
@@ -238,7 +268,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try primaryEvent(
@@ -271,7 +301,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: shortcut, mode: .hold)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try markedEvent(type: .keyDown, keyCode: 9, flags: .maskCommand))
@@ -284,7 +314,7 @@ final class HotKeyMonitorTests: XCTestCase {
     func testInitialRecorderStateKeepsMonitorSuspendedUntilCaptureEnds() throws {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var starts = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
 
         monitor.setSuspendedForShortcutCapture(true)
         monitor.handle(try primaryEvent(
@@ -306,7 +336,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try primaryEvent(
@@ -336,7 +366,7 @@ final class HotKeyMonitorTests: XCTestCase {
         let monitor = HotKeyMonitor(shortcut: semicolonShortcut, mode: .hold)
         var starts = 0
         var stops = 0
-        monitor.onStart = { starts += 1 }
+        monitor.onStart = { starts += 1; return true }
         monitor.onStop = { stops += 1 }
 
         monitor.handle(try primaryEvent(type: .keyDown, modifiers: [.control, .option, .shift]))

@@ -15,8 +15,10 @@ final class HotKeyMonitor {
     private var isActive = false
     private var isSuspended = false
 
-    /// Begin capturing. In tap mode this fires on alternate presses.
-    var onStart: (() -> Void)?
+    /// Begin capturing. Return true only when recording actually started. The
+    /// monitor commits its active state after this callback succeeds, so a
+    /// rejected warm-up or permission attempt can be retried on the next press.
+    var onStart: (() -> Bool)?
     /// Stop capturing and transcribe.
     var onStop: (() -> Void)?
 
@@ -171,15 +173,14 @@ final class HotKeyMonitor {
         switch mode {
         case .hold:
             guard !isActive else { return }
-            isActive = true
-            onStart?()
+            isActive = onStart?() ?? false
 
         case .tap:
-            isActive.toggle()
             if isActive {
-                onStart?()
-            } else {
+                isActive = false
                 onStop?()
+            } else {
+                isActive = onStart?() ?? false
             }
         }
     }

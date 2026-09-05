@@ -221,12 +221,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mode: settings.activationMode
         )
         hotkey.onStart = { [weak self] in
-            guard let self else { return }
+            guard let self, self.beginDictation() else { return false }
             if self.shouldShowFirstDictationCoach {
                 self.markFirstDictationCoachHandled()
             }
             self.windows.dismissFirstDictationCoach()
-            self.beginDictation()
+            return true
         }
         hotkey.onStop = { [weak self] in self?.endDictation() }
         settings.onHotKeyConfigurationChange = { [weak self] in
@@ -430,22 +430,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Dictation lifecycle
 
-    private func beginDictation() {
+    @discardableResult
+    private func beginDictation() -> Bool {
         guard isASRReady else {
             guard asr != nil else {
                 state.phase = .failed("Speech engine is not running")
                 panel.present()
                 scheduleDismiss(after: 1.8)
-                return
+                return false
             }
             state.phase = .loading
             panel.present()
-            return
+            return false
         }
-        guard state.phase != .listening else { return }
+        guard state.phase != .listening else { return false }
         guard activeCursorContextGeneration == nil else {
             Log.write("dictation start ignored while cursor context probe settles")
-            return
+            return false
         }
         dismissWork?.cancel()
         cursorContextGeneration &+= 1
@@ -478,15 +479,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                !hasResolvedPrecedingText {
                 startCursorContextResolution(allowWhilePhysicalModifiersPressed: true)
             }
+            return true
         } catch {
+            asr.stopUtterance()
             cancelCursorContextResolution()
             state.stopDictationTimer()
             state.phase = .failed("Microphone unavailable")
             scheduleDismiss(after: 1.6)
+            return false
         }
     }
 
     private func endDictation() {
+        // Releasing the shortcut during first-launch warm-up must not dismiss
+        // the HUD. Startup completion owns that lifecycle and replaces it with
+        // the brief Ready state before dismissal.
+        guard state.phase != .loading else { return }
         guard state.phase == .listening else { return }
         capture.stop()
         state.stopDictationTimer()
@@ -516,7 +524,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             presentFirstDictationCoachIfReady()
             if state.phase == .loading {
                 if panel.isVisible {
-                    dismissNow()
+                    state.phase = .ready
+                    scheduleDismiss(after: 0.65)
                 } else {
                     state.phase = .idle
                 }

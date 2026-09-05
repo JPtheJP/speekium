@@ -79,21 +79,19 @@ fi
 
 echo "▸ installing pinned ASR dependencies"
 SITE_PACKAGES="$RUNTIME/lib/python3.12/site-packages"
-"$RUNTIME_PYTHON" -m pip install \
-    --disable-pip-version-check \
-    --no-cache-dir \
-    --platform "macosx_${RUNTIME_MINIMUM_MACOS/./_}_arm64" \
-    --implementation cp \
-    --python-version 3.12 \
-    --abi cp312 \
-    --only-binary=:all: \
-    --upgrade \
-    --target "$SITE_PACKAGES" \
-    -r "$PROJECT_ROOT/requirements-macos-arm64.txt"
-"$RUNTIME_PYTHON" -m pip install \
+case "$SITE_PACKAGES" in
+    "$RUNTIME"/*) ;;
+    *) echo "error: unsafe runtime site-packages path" >&2; exit 1 ;;
+esac
+# A standalone distribution may contain build-time packages. Start the shipped
+# site-packages tree from the reviewed lock instead of inheriting them.
+rm -rf "$SITE_PACKAGES"
+mkdir -p "$SITE_PACKAGES"
+"$SOURCE_PYTHON" -m pip install \
     --disable-pip-version-check \
     --no-cache-dir \
     --no-deps \
+    --require-hashes \
     --platform "macosx_${RUNTIME_MINIMUM_MACOS/./_}_arm64" \
     --implementation cp \
     --python-version 3.12 \
@@ -101,18 +99,26 @@ SITE_PACKAGES="$RUNTIME/lib/python3.12/site-packages"
     --only-binary=:all: \
     --upgrade \
     --target "$SITE_PACKAGES" \
-    -r "$PROJECT_ROOT/requirements-macos-arm64-nodeps.txt"
+    -r "$PROJECT_ROOT/requirements-macos-arm64.lock"
+"$SOURCE_PYTHON" -m pip install \
+    --disable-pip-version-check \
+    --no-cache-dir \
+    --no-deps \
+    --require-hashes \
+    --platform "macosx_${RUNTIME_MINIMUM_MACOS/./_}_arm64" \
+    --implementation cp \
+    --python-version 3.12 \
+    --abi cp312 \
+    --only-binary=:all: \
+    --upgrade \
+    --target "$SITE_PACKAGES" \
+    -r "$PROJECT_ROOT/requirements-macos-arm64-nodeps.lock"
 
-# The release is code-signed after this script runs. Removing bytecode caches
-# and pip's cache makes the archive smaller without removing runtime content.
-find "$RUNTIME" -type d -name __pycache__ -prune -exec rm -rf {} +
-find "$RUNTIME" -type d -name .pytest_cache -prune -exec rm -rf {} +
-
-MLX_VERSION="$(awk -F== '$1 == "mlx" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64.txt")"
-NUMPY_VERSION="$(awk -F== '$1 == "numpy" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64.txt")"
-HF_VERSION="$(awk -F== '$1 == "huggingface-hub" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64.txt")"
-ASR_VERSION="$(awk -F== '$1 == "mlx-qwen3-asr" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64.txt")"
-WHISPER_VERSION="$(awk -F== '$1 == "mlx-whisper" {print $2}' "$PROJECT_ROOT/requirements-macos-arm64-nodeps.txt")"
+MLX_VERSION="$(awk -F'[ =]' '$1 == "mlx" {print $3}' "$PROJECT_ROOT/requirements-macos-arm64.lock")"
+NUMPY_VERSION="$(awk -F'[ =]' '$1 == "numpy" {print $3}' "$PROJECT_ROOT/requirements-macos-arm64.lock")"
+HF_VERSION="$(awk -F'[ =]' '$1 == "huggingface-hub" {print $3}' "$PROJECT_ROOT/requirements-macos-arm64.lock")"
+ASR_VERSION="$(awk -F'[ =]' '$1 == "mlx-qwen3-asr" {print $3}' "$PROJECT_ROOT/requirements-macos-arm64.lock")"
+WHISPER_VERSION="$(awk -F'[ =]' '$1 == "mlx-whisper" {print $3}' "$PROJECT_ROOT/requirements-macos-arm64-nodeps.lock")"
 INSTALLED_BYTES="$(du -sk "$RUNTIME" | awk '{print $1 * 1024}')"
 cat > "$RUNTIME/manifest.json" <<MANIFEST
 {
@@ -168,6 +174,12 @@ if [ "$RELEASE" = "1" ]; then
     done < <(find "$RUNTIME" -type f -print0 | xargs -0 file | awk -F: '/Mach-O/ {print $1}')
 fi
 
+# Imports above may have created bytecode. Remove it while the tree is still in
+# private build staging; installed runtimes are authenticated without mutation.
+python3 "$PROJECT_ROOT/WhisprStream/runtime-content-sha256.py" \
+    --remove-bytecode "$RUNTIME" >/dev/null
+find "$RUNTIME" -type d -name .pytest_cache -prune -exec rm -rf {} +
+
 INSTALLED_BYTES="$(du -sk "$RUNTIME" | awk '{print $1 * 1024}')"
 python3 - "$RUNTIME/manifest.json" "$INSTALLED_BYTES" <<'PY'
 import json, sys
@@ -180,6 +192,10 @@ with open(path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
 
+RUNTIME_CONTENT_SHA256="$(
+    python3 "$PROJECT_ROOT/WhisprStream/runtime-content-sha256.py" "$RUNTIME"
+)"
+
 echo "▸ creating $(basename "$OUTPUT")"
 mkdir -p "$(dirname "$OUTPUT")"
 rm -f "$OUTPUT"
@@ -189,6 +205,16 @@ if [ "$ARCHIVE_TOP_LEVEL" != "runtime" ]; then
     echo "error: runtime archive must contain exactly one top-level runtime directory" >&2
     exit 1
 fi
+ROUNDTRIP="$STAGING/roundtrip"
+mkdir -p "$ROUNDTRIP"
+ditto -x -k "$OUTPUT" "$ROUNDTRIP"
+ROUNDTRIP_CONTENT_SHA256="$(
+    python3 "$PROJECT_ROOT/WhisprStream/runtime-content-sha256.py" "$ROUNDTRIP/runtime"
+)"
+[ "$ROUNDTRIP_CONTENT_SHA256" = "$RUNTIME_CONTENT_SHA256" ] || {
+    echo "error: archived runtime extracts to a different authenticated tree" >&2
+    exit 1
+}
 ARCHIVE_BYTES="$(stat -f%z "$OUTPUT")"
 ARCHIVE_SHA256="$(shasum -a 256 "$OUTPUT" | awk '{print $1}')"
 cat > "${OUTPUT%.zip}.metadata.json" <<META
@@ -197,7 +223,8 @@ cat > "${OUTPUT%.zip}.metadata.json" <<META
   "archive": "$(basename "$OUTPUT")",
   "archiveBytes": $ARCHIVE_BYTES,
   "installedBytes": $INSTALLED_BYTES,
-  "sha256": "$ARCHIVE_SHA256"
+  "sha256": "$ARCHIVE_SHA256",
+  "contentSha256": "$RUNTIME_CONTENT_SHA256"
 }
 META
 
@@ -205,3 +232,4 @@ echo "✓ runtime archive created"
 echo "archive bytes: $ARCHIVE_BYTES"
 echo "installed bytes: $INSTALLED_BYTES"
 echo "sha256: $ARCHIVE_SHA256"
+echo "content sha256: $RUNTIME_CONTENT_SHA256"

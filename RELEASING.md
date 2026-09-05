@@ -6,7 +6,7 @@ WhisprStream ships a small native app and a separately downloadable Apple-silico
 
 Use a relocatable standalone CPython 3.12 distribution. Do not use Homebrew Python or a venv.
 
-Public app version `1.0.1` compiles optional models out and intentionally reuses the immutable `WhisprStream-runtime-1.0.0-arm64.zip` asset. Do not rebuild or replace that asset under its existing version or URL.
+Public app version `1.0.2` compiles optional models out and intentionally reuses the immutable `WhisprStream-runtime-1.0.0-arm64.zip` asset. Do not rebuild or replace that asset under its existing version or URL. The signed app also pins the complete extracted runtime tree, including the bytecode shipped in that immutable archive; installed runtime verification never deletes or rewrites files.
 
 The current `build-runtime.sh` includes the experimental MLX Whisper adapter and is for a future runtime version only. Before enabling optional models publicly, resolve the deferred model-validation work, assign a new immutable runtime version (for example `1.1.0`), build it, and update every runtime value below.
 
@@ -22,7 +22,7 @@ public key:
 ```bash
 swift build -c release --package-path WhisprStream \
   --product WhisprStreamUpdateSigner
-codesign --force --sign "WhisprStream Self-Signed" \
+codesign --force --options runtime,library --sign "WhisprStream Self-Signed" \
   WhisprStream/.build/release/WhisprStreamUpdateSigner
 WhisprStream/.build/release/WhisprStreamUpdateSigner generate
 ```
@@ -45,16 +45,17 @@ The expected code-signing certificate SHA-1 is independently pinned in
 an update key, repository, or signing identity that differs from these reviewed
 trust roots. Change a pin only as an explicit key-rotation procedure.
 
-App version `1.0.1` intentionally reuses runtime version `1.0.0`; the runtime
+App version `1.0.2` intentionally reuses runtime version `1.0.0`; the runtime
 version changes only when the standalone Python or dependency payload changes.
 
 ```bash
-RELEASE=1 VERSION=1.0.1 BUILD_NUMBER=3 ENABLE_OPTIONAL_MODELS=0 \
+RELEASE=1 VERSION=1.0.2 BUILD_NUMBER=4 ENABLE_OPTIONAL_MODELS=0 \
 BUNDLE_IDENTIFIER="com.leoleo.whisprstream" \
 SIGNING_IDENTITY="WhisprStream Self-Signed" \
 RUNTIME_VERSION=1.0.0 \
 RUNTIME_URL="https://github.com/Leo6Leo/whispr-stream/releases/download/v1.0.0/WhisprStream-runtime-1.0.0-arm64.zip" \
 RUNTIME_SHA256="b155e21c0bad58d9566430205d0226d7e9066f7b7b7886c7107a53e5a33e221f" \
+RUNTIME_CONTENT_SHA256="747eba6e37c2997070ae995c0ca64c116b01071f4f086ccfecf27073a166e0f8" \
 RUNTIME_ARCHIVE_BYTES="78119418" \
 RUNTIME_INSTALLED_BYTES="248872960" \
 WhisprStream/build.sh
@@ -86,7 +87,7 @@ shasum -a 256 WhisprStream-macos-arm64.zip \
   WhisprStream-runtime-1.0.0-arm64.zip > SHA256SUMS
 WhisprStream/validate-release.sh WhisprStream-macos-arm64.zip \
   WhisprStream-runtime-1.0.0-arm64.zip SHA256SUMS \
-  WhisprStream-macos-arm64.zip.ed25519 1.0.1 3
+  WhisprStream-macos-arm64.zip.ed25519 1.0.2 4
 ```
 
 ## Local updater dry runs
@@ -137,7 +138,7 @@ Self-signing does not provide Apple trust, does not notarize the app, and does n
 
 ## 4. Draft release and clean-Mac qualification
 
-For this release, create a draft GitHub Release tagged `v1.0.1`, upload:
+For this release, create a draft GitHub Release tagged `v1.0.2`, upload:
 
 - `WhisprStream-macos-arm64.zip`
 - `WhisprStream-macos-arm64.zip.ed25519`
@@ -158,7 +159,7 @@ Record failure-state screenshots and logs. Verify that an app replacement preser
 
 Confirm the website's download link resolves to the stable app asset and that all source links resolve to [github.com/Leo6Leo/whispr-stream](https://github.com/Leo6Leo/whispr-stream). The website must not advertise a Homebrew command until a real Cask exists.
 
-In Settings → About, confirm that the update checker accepts exact stable semantic versions such as `v1.0.1`, ignores drafts and prereleases, rejects missing, oversized, duplicate, or incorrectly signed assets, and offers **Install and Relaunch** only after discovering both exact update assets. Test a valid signed update end to end from a writable copy in Applications, including relaunch after a quarantined download, plus tampered-signature and read-only-location failures. Quarantine is cleared only from a replacement that has passed the pinned Ed25519 signature and bundle checks. The manual GitHub button must remain available as recovery.
+In Settings → About, confirm that the update checker accepts exact stable semantic versions such as `v1.0.2`, ignores drafts and prereleases, rejects missing, oversized, duplicate, or incorrectly signed assets, and offers **Install and Relaunch** only after discovering both exact update assets. Test a valid signed update end to end from a writable copy in Applications, including relaunch after a quarantined download, plus tampered-signature and read-only-location failures. Quarantine is cleared only from a replacement that has passed the pinned Ed25519 signature and bundle checks. The manual GitHub button must remain available as recovery.
 
 ## Local developer test mode
 
@@ -184,6 +185,6 @@ testing without relaunching.
 This mode is developer-only and is never included as a public runtime path.
 
 Local builds enable experimental optional models by default. Use
-`ENABLE_OPTIONAL_MODELS=0 WhisprStream/build.sh` to reproduce the public 1.0.1
+`ENABLE_OPTIONAL_MODELS=0 WhisprStream/build.sh` to reproduce the public 1.0.2
 model UI and runtime requirements. `RELEASE=1` always enforces that setting and
 cannot be overridden.

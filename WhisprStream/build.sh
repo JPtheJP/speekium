@@ -9,12 +9,13 @@ cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
 PYTHON="${PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 APP="${APP:-$PROJECT_ROOT/WhisprStream.app}"
-VERSION="${VERSION:-1.0.1}"
-BUILD_NUMBER="${BUILD_NUMBER:-3}"
+VERSION="${VERSION:-1.0.2}"
+BUILD_NUMBER="${BUILD_NUMBER:-4}"
 RELEASE="${RELEASE:-0}"
 ENABLE_OPTIONAL_MODELS="${ENABLE_OPTIONAL_MODELS:-}"
 RUNTIME_URL="${RUNTIME_URL:-}"
 RUNTIME_SHA256="${RUNTIME_SHA256:-}"
+RUNTIME_CONTENT_SHA256="${RUNTIME_CONTENT_SHA256:-}"
 RUNTIME_VERSION="${RUNTIME_VERSION:-}"
 RUNTIME_ARCHIVE_BYTES="${RUNTIME_ARCHIVE_BYTES:-}"
 RUNTIME_INSTALLED_BYTES="${RUNTIME_INSTALLED_BYTES:-}"
@@ -62,11 +63,20 @@ if [ "$ENABLE_OPTIONAL_MODELS" = "1" ]; then
 fi
 
 swift_build() {
+    local swift_defines=()
     if [ "$ENABLE_OPTIONAL_MODELS" = "1" ]; then
-        swift build "$@" -Xswiftc -D -Xswiftc WHISPR_ENABLE_OPTIONAL_MODELS
-    else
-        swift build "$@"
+        swift_defines+=(
+            -Xswiftc -D -Xswiftc WHISPR_ENABLE_OPTIONAL_MODELS
+        )
     fi
+    if [ "$RELEASE" = "1" ]; then
+        # This must be compile-time, not inferred solely from mutable runtime
+        # metadata, so a release binary can never honor developer overrides.
+        swift_defines+=(
+            -Xswiftc -D -Xswiftc WHISPR_RELEASE
+        )
+    fi
+    swift build "$@" "${swift_defines[@]}"
 }
 
 if [ "$RELEASE" = "1" ]; then
@@ -75,13 +85,15 @@ if [ "$RELEASE" = "1" ]; then
         echo "error: release app version must be stable semantic version and build number must be positive" >&2
         exit 1
     fi
-    if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ] || [ -z "$RUNTIME_VERSION" ] \
+    if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ] \
+        || [ -z "$RUNTIME_CONTENT_SHA256" ] || [ -z "$RUNTIME_VERSION" ] \
         || [ -z "$RUNTIME_ARCHIVE_BYTES" ] || [ -z "$RUNTIME_INSTALLED_BYTES" ]; then
-        echo "error: release builds require runtime URL, version, checksum, and byte metadata" >&2
+        echo "error: release builds require runtime URL, version, archive/content checksums, and byte metadata" >&2
         exit 1
     fi
     if ! [[ "$RUNTIME_URL" =~ ^https:// ]] || [[ "$RUNTIME_URL" == *"latest/download"* ]] \
         || ! [[ "$RUNTIME_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
+        || ! [[ "$RUNTIME_CONTENT_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
         || ! [[ "$RUNTIME_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
         || ! [[ "$RUNTIME_ARCHIVE_BYTES" =~ ^[1-9][0-9]*$ ]] \
         || ! [[ "$RUNTIME_INSTALLED_BYTES" =~ ^[1-9][0-9]*$ ]]; then
@@ -125,11 +137,21 @@ if [ "$RELEASE" = "1" ]; then
     # Swift embeds source and object-file paths in optimized executables. Map
     # the repository root to a stable synthetic path so public artifacts never
     # disclose the builder's user name or local directory layout.
-    swift_build -c release \
+    RELEASE_PATH_FLAGS=(
         -Xswiftc -file-prefix-map \
         -Xswiftc "$PROJECT_ROOT=/src" \
         -Xcc "-fdebug-prefix-map=$PROJECT_ROOT=/src" \
         -Xcc "-ffile-prefix-map=$PROJECT_ROOT=/src"
+    )
+    # Keep the standalone signer's established binary/Keychain access
+    # requirement stable. WHISPR_RELEASE is needed only by the app target's
+    # runtime-selection code.
+    swift build -c release --product WhisprStreamUpdateSigner \
+        "${RELEASE_PATH_FLAGS[@]}"
+    swift build -c release --product WhisprStreamUpdateInstaller \
+        "${RELEASE_PATH_FLAGS[@]}"
+    swift_build -c release --product WhisprStream \
+        "${RELEASE_PATH_FLAGS[@]}"
 else
     swift_build -c release
 fi
@@ -194,6 +216,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 $DEVELOPMENT_PYTHON_PLIST
     <key>WhisprRuntimeURL</key><string>$RUNTIME_URL</string>
     <key>WhisprRuntimeSHA256</key><string>$RUNTIME_SHA256</string>
+    <key>WhisprRuntimeContentSHA256</key><string>$RUNTIME_CONTENT_SHA256</string>
     <key>WhisprRuntimeVersion</key><string>$RUNTIME_VERSION</string>
     <key>WhisprRuntimeArchiveBytes</key><string>$RUNTIME_ARCHIVE_BYTES</string>
     <key>WhisprRuntimeInstalledBytes</key><string>$RUNTIME_INSTALLED_BYTES</string>
@@ -213,8 +236,10 @@ PLIST
 # different app to TCC and silently drops the Accessibility grant. A self-signed
 # certificate keeps one identity across rebuilds, so the grant sticks.
 IDENTITY="$SIGNING_IDENTITY"
+CODESIGN_OPTIONS=()
 if [ "$RELEASE" = "1" ]; then
     echo "▸ signing release with $IDENTITY"
+    CODESIGN_OPTIONS=(--options runtime,library)
 else
     if security find-identity -p codesigning 2>/dev/null | grep -q "WhisprStream Self-Signed"; then
         IDENTITY="WhisprStream Self-Signed"
@@ -229,14 +254,17 @@ fi
 if [ "$RELEASE" = "1" ]; then
     # A stable code identity lets this release-only tool retain access to the
     # same login-Keychain signing key across rebuilds.
-    codesign --force --sign "$IDENTITY" "$UPDATE_SIGNER"
+    codesign --force "${CODESIGN_OPTIONS[@]}" --sign "$IDENTITY" "$UPDATE_SIGNER"
     codesign --verify --strict "$UPDATE_SIGNER"
     codesign --verify --strict \
         -R="identifier \"WhisprStreamUpdateSigner\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
         "$UPDATE_SIGNER"
 fi
-codesign --force --sign "$IDENTITY" "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
-codesign --force --deep --sign "$IDENTITY" "$APP"
+codesign --force "${CODESIGN_OPTIONS[@]}" --sign "$IDENTITY" \
+    "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
+# Nested code is signed explicitly above; signing the outer bundle without
+# --deep prevents codesign from making implicit nested-code decisions.
+codesign --force "${CODESIGN_OPTIONS[@]}" --sign "$IDENTITY" "$APP"
 if [ "$RELEASE" = "1" ]; then
     codesign --verify --strict --deep "$APP"
     codesign --verify --strict --deep \
@@ -245,6 +273,19 @@ if [ "$RELEASE" = "1" ]; then
     codesign --verify --strict \
         -R="identifier \"WhisprStreamUpdateInstaller\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
         "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
+    assert_hardened_runtime() {
+        local executable="$1"
+        local details
+        details="$(codesign -dv --verbose=4 "$executable" 2>&1)"
+        echo "$details" | grep -q 'flags=.*runtime' \
+            && echo "$details" | grep -q 'flags=.*library-validation' || {
+                echo "error: hardened runtime and library validation are required: $executable" >&2
+                exit 1
+            }
+    }
+    assert_hardened_runtime "$UPDATE_SIGNER"
+    assert_hardened_runtime "$APP/Contents/Helpers/WhisprStreamUpdateInstaller"
+    assert_hardened_runtime "$APP"
     if /usr/libexec/PlistBuddy -c "Print :WhisprDevelopmentPythonPath" "$APP/Contents/Info.plist" >/dev/null 2>&1; then
         echo "error: release Info.plist contains a development Python path" >&2
         exit 1

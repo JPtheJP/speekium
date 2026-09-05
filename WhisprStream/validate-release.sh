@@ -72,6 +72,18 @@ codesign --verify --strict --deep \
 codesign --verify --strict \
     -R="identifier \"WhisprStreamUpdateInstaller\" and certificate leaf = H\"$PINNED_SIGNING_CERT_SHA1\"" \
     "$UPDATE_INSTALLER"
+assert_hardened_runtime() {
+    local executable="$1"
+    local details
+    details="$(codesign -dv --verbose=4 "$executable" 2>&1)"
+    echo "$details" | grep -q 'flags=.*runtime' \
+        && echo "$details" | grep -q 'flags=.*library-validation' || {
+            echo "error: hardened runtime and library validation are required: $executable" >&2
+            exit 1
+        }
+}
+assert_hardened_runtime "$APP_DIR"
+assert_hardened_runtime "$UPDATE_INSTALLER"
 
 plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP_DIR/Contents/Info.plist" 2>/dev/null; }
 required_plist() {
@@ -91,6 +103,7 @@ DEV_PYTHON="$(plist WhisprDevelopmentPythonPath || true)"
 RUNTIME_VERSION="$(required_plist WhisprRuntimeVersion)"
 RUNTIME_URL="$(required_plist WhisprRuntimeURL)"
 RUNTIME_SHA256="$(required_plist WhisprRuntimeSHA256)"
+RUNTIME_CONTENT_SHA256="$(required_plist WhisprRuntimeContentSHA256)"
 ARCHIVE_BYTES="$(required_plist WhisprRuntimeArchiveBytes)"
 INSTALLED_BYTES="$(required_plist WhisprRuntimeInstalledBytes)"
 UPDATE_REPOSITORY="$(required_plist WhisprUpdateRepository)"
@@ -104,6 +117,7 @@ OPTIONAL_MODELS_ENABLED="$(required_plist WhisprOptionalModelsEnabled)"
 [ -z "$DEV_PYTHON" ] || { echo "error: development Python path is embedded" >&2; exit 1; }
 [[ "$RUNTIME_URL" =~ ^https:// ]] && [[ "$RUNTIME_URL" != *latest/download* ]] || { echo "error: runtime URL is not immutable HTTPS" >&2; exit 1; }
 [[ "$RUNTIME_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "error: invalid runtime SHA-256" >&2; exit 1; }
+[[ "$RUNTIME_CONTENT_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "error: invalid runtime content SHA-256" >&2; exit 1; }
 [[ "$RUNTIME_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: invalid runtime version" >&2; exit 1; }
 [[ "$ARCHIVE_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "error: invalid runtime archive bytes" >&2; exit 1; }
 [[ "$INSTALLED_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "error: invalid runtime installed bytes" >&2; exit 1; }
@@ -150,7 +164,10 @@ guard CommandLine.arguments.count == 4,
 ' "$PINNED_UPDATE_PUBLIC_KEY" "$APP" "$APP_SIGNATURE"
 
 STAGING="$VALIDATION_TMP/runtime"
-unzip -q "$RUNTIME_ZIP" -d "$STAGING"
+# RuntimeManager installs with ditto. Use the identical extractor here because
+# macOS ZIP AppleDouble entries are metadata to ditto but ordinary `._*` files
+# to unzip, which would authenticate a different tree than production runs.
+ditto -x -k "$RUNTIME_ZIP" "$STAGING"
 TOP_LEVEL="$(find "$STAGING" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null || true)"
 [ "$TOP_LEVEL" = "runtime" ] || { echo "error: runtime zip has the wrong top-level layout" >&2; exit 1; }
 MANIFEST="$STAGING/runtime/manifest.json"
@@ -160,6 +177,14 @@ MANIFEST_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1
 MANIFEST_MIN_OS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["minimumMacOS"])' "$MANIFEST")"
 [ "$MANIFEST_VERSION" = "$RUNTIME_VERSION" ] || { echo "error: runtime manifest version disagrees with app" >&2; exit 1; }
 [ "$MANIFEST_MIN_OS" = "$MIN_OS" ] || { echo "error: runtime and app minimum macOS versions disagree" >&2; exit 1; }
+ACTUAL_RUNTIME_CONTENT_SHA256="$(
+    python3 "$SCRIPT_DIR/runtime-content-sha256.py" "$STAGING/runtime"
+)"
+EXPECTED_RUNTIME_CONTENT_SHA256="$(printf '%s' "$RUNTIME_CONTENT_SHA256" | tr '[:upper:]' '[:lower:]')"
+[ "$ACTUAL_RUNTIME_CONTENT_SHA256" = "$EXPECTED_RUNTIME_CONTENT_SHA256" ] || {
+    echo "error: app embedded runtime content digest differs from runtime archive" >&2
+    exit 1
+}
 PYTHONNOUSERSITE=1 PYTHONPATH= PYTHONHOME= VIRTUAL_ENV= "$PYTHON" -s -u -c 'import mlx, numpy, huggingface_hub, mlx_qwen3_asr'
 
 version_at_most() {

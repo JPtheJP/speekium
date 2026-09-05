@@ -17,5 +17,9 @@ models/
 
 # Swift build artifacts
 WhisprStream/.build/
+
+# Local HUD prototypes
+warmup-preview/
+
 # macOS
 .DS_Store

@@ -159,7 +159,7 @@ Run the packaged recording-shortcut E2E:
 
     WhisprStream/e2e-trigger-shortcut.sh
 
-This builds the 1.0.1 build 3 development artifact, verifies its embedded
+This builds the 1.0.2 build 4 development artifact, verifies its embedded
 bundle version, launches the packaged executable directly, and checks
 candidate capture, migration, persistence, hold/tap matching, F13 handling,
 modifier-release safety, suspension/rebinding, and coach copy. Physical

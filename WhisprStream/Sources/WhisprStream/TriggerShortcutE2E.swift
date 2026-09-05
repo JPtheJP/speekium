@@ -90,7 +90,7 @@ enum TriggerShortcutE2E {
         var holdStarts = 0
         var holdStops = 0
         let holdMonitor = HotKeyMonitor(shortcut: semicolon, mode: .hold)
-        holdMonitor.onStart = { holdStarts += 1 }
+        holdMonitor.onStart = { holdStarts += 1; return true }
         holdMonitor.onStop = { holdStops += 1 }
 
         holdMonitor.handle(semicolonEvent)
@@ -123,7 +123,7 @@ enum TriggerShortcutE2E {
         var tapStarts = 0
         var tapStops = 0
         let tapMonitor = HotKeyMonitor(shortcut: semicolon, mode: .tap)
-        tapMonitor.onStart = { tapStarts += 1 }
+        tapMonitor.onStart = { tapStarts += 1; return true }
         tapMonitor.onStop = { tapStops += 1 }
         tapMonitor.handle(semicolonEvent)
         tapMonitor.handle(try keyEvent(
@@ -141,7 +141,7 @@ enum TriggerShortcutE2E {
         var functionStarts = 0
         var functionStops = 0
         let functionMonitor = HotKeyMonitor(shortcut: f13, mode: .hold)
-        functionMonitor.onStart = { functionStarts += 1 }
+        functionMonitor.onStart = { functionStarts += 1; return true }
         functionMonitor.onStop = { functionStops += 1 }
         functionMonitor.handle(try keyEvent(
             type: .keyDown,
@@ -168,7 +168,7 @@ enum TriggerShortcutE2E {
         var suspendedStarts = 0
         var suspendedStops = 0
         let suspendedMonitor = HotKeyMonitor(shortcut: semicolon, mode: .hold)
-        suspendedMonitor.onStart = { suspendedStarts += 1 }
+        suspendedMonitor.onStart = { suspendedStarts += 1; return true }
         suspendedMonitor.onStop = { suspendedStops += 1 }
         suspendedMonitor.handle(semicolonEvent)
         suspendedMonitor.suspend()
